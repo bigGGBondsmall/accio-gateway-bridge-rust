@@ -1,0 +1,28 @@
+
+> accio-bridge-ui@0.1.0 test
+> node --test test/*.test.js
+
+✔ UI through real local Rust core: connect/create/edit/disable/delete, token not persisted (515.3646ms)
+✔ initial connected native status and token field hidden (1.1914ms)
+✔ edit never renders saved API key; cancel clears input (5.7683ms)
+✔ changing destination requires explicit credential choice (4.2416ms)
+✔ unchanged edit omits secret; new clear is explicit (3.284ms)
+✔ unsafe credential URL rejected (3.5396ms)
+✔ search produces real empty state (1.774ms)
+✔ disable uses real POST and no key leakage (4.8405ms)
+✔ delete cancel makes no request, confirmation deletes (2.9317ms)
+✔ diagnostics never calls model endpoints (1.9334ms)
+✔ error surface never echoes credentials (0.3239ms)
+✔ untrusted model labels inserted as text (1.7052ms)
+✔ settings save uses config endpoint, not model request (7.0195ms)
+✔ local discovery is explicit and selecting result only prefills editor (3.1173ms)
+✔ Accio launch requires separate confirmation, cancel never launches (mock only) (6.7166ms)
+✔ management outage clears stale success indicators and raw error is never rendered (2.228ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1033.0263

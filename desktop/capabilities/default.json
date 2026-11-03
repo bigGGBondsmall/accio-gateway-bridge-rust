@@ -1,0 +1,1 @@
+{"identifier":"main-window","description":"Local management window; no filesystem, network or shell permission exposed to JavaScript","windows":["main"],"permissions":["core:default"]}

@@ -1,0 +1,26 @@
+{
+  "_readme": "Copy to config.json for a fresh installation. Preserve your existing config.json when applying the patch. Add providers through the local management UI.",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "maxBodyBytes": 26214400,
+    "cors": true,
+    "token": "",
+    "enforceToken": false,
+    "logLevel": "info"
+  },
+  "upstream": {
+    "baseUrl": "https://phoenix-gw.alibaba.com",
+    "timeoutMs": 300000,
+    "apiKey": ""
+  },
+  "catalog": {
+    "enabled": true,
+    "providerName": "custom",
+    "providerDisplayName": "Custom AI (Local / OpenAI)",
+    "fetchOfficial": true,
+    "timeoutMs": 8000,
+    "cacheTtlMs": 300000
+  },
+  "models": []
+}

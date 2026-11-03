@@ -1,0 +1,1742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Accio Gateway Bridge · Dashboard & Playground</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --bg-card: #111827;
+      --bg-subtle: #1f2937;
+      --border: #374151;
+      --border-focus: #6366f1;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --text-subtle: #6b7280;
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --primary-light: rgba(99, 102, 241, 0.15);
+      --success: #10b981;
+      --success-light: rgba(16, 185, 129, 0.15);
+      --warning: #f59e0b;
+      --warning-light: rgba(245, 158, 11, 0.15);
+      --danger: #ef4444;
+      --danger-light: rgba(239, 68, 68, 0.15);
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+    }
+
+    [data-theme="light"] {
+      --bg: #f8fafc;
+      --bg-card: #ffffff;
+      --bg-subtle: #f1f5f9;
+      --border: #e2e8f0;
+      --border-focus: #4f46e5;
+      --text: #0f172a;
+      --text-muted: #475569;
+      --text-subtle: #94a3b8;
+      --primary: #4f46e5;
+      --primary-hover: #4338ca;
+      --primary-light: rgba(79, 70, 229, 0.08);
+      --success: #059669;
+      --success-light: rgba(5, 150, 105, 0.1);
+      --warning: #d97706;
+      --warning-light: rgba(217, 119, 6, 0.1);
+      --danger: #dc2626;
+      --danger-light: rgba(220, 38, 38, 0.1);
+      --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      line-height: 1.5;
+      padding-bottom: 60px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px 20px;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 28px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .logo-badge {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+      color: #fff;
+    }
+
+    .logo-badge svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .brand-title h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-title p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px 16px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text);
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.15s ease;
+    }
+
+    .btn:hover {
+      background: var(--bg-subtle);
+      border-color: var(--border-focus);
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      border-color: var(--primary-hover);
+    }
+
+    .btn-sm {
+      padding: 5px 10px;
+      font-size: 0.8rem;
+    }
+
+    .btn-danger {
+      color: var(--danger);
+      border-color: var(--danger-light);
+    }
+
+    .btn-danger:hover {
+      background: var(--danger-light);
+      border-color: var(--danger);
+    }
+
+    /* Status Pill */
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 0.825rem;
+      font-weight: 600;
+      background: var(--success-light);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--success);
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+      }
+    }
+
+    /* Metrics Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .metric-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .metric-title {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .metric-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+
+    .metric-sub {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+      word-break: break-all;
+    }
+
+    /* Quick Launch Instruction Card */
+    .launcher-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+      margin-bottom: 28px;
+      border-left: 4px solid var(--primary);
+    }
+
+    .launcher-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .launcher-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .tab-pills {
+      display: flex;
+      background: var(--bg-subtle);
+      border-radius: var(--radius-sm);
+      padding: 3px;
+      gap: 4px;
+    }
+
+    .tab-pill {
+      padding: 4px 12px;
+      font-size: 0.775rem;
+      font-weight: 600;
+      border-radius: 6px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+
+    .tab-pill.active {
+      background: var(--bg-card);
+      color: var(--text);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    .code-box {
+      position: relative;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      overflow-x: auto;
+      gap: 12px;
+    }
+
+    .code-content {
+      white-space: nowrap;
+      user-select: all;
+    }
+
+    .launcher-note {
+      font-size: 0.825rem;
+      color: var(--text-muted);
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Section Styling */
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .section-title {
+      font-size: 1.15rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Models Table */
+    .models-table-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      margin-bottom: 28px;
+      overflow: hidden;
+    }
+
+    .table-responsive {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    th {
+      background: var(--bg-subtle);
+      padding: 12px 18px;
+      font-size: 0.775rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.875rem;
+      vertical-align: middle;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: var(--bg-subtle);
+    }
+
+    .model-name-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .model-display-name {
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .model-id-code {
+      font-family: var(--font-mono);
+      font-size: 0.775rem;
+      color: var(--text-muted);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 9999px;
+      font-size: 0.725rem;
+      font-weight: 600;
+    }
+
+    .badge-provider {
+      background: var(--primary-light);
+      color: var(--primary);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }
+
+    .badge-stream {
+      background: var(--success-light);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .badge-nostream {
+      background: var(--warning-light);
+      color: var(--warning);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .badge-default {
+      background: rgba(168, 85, 247, 0.15);
+      color: #a855f7;
+      border: 1px solid rgba(168, 85, 247, 0.3);
+    }
+
+    .table-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Switch */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: var(--border);
+      transition: .2s;
+      border-radius: 20px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .2s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-color: var(--success);
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(16px);
+    }
+
+    /* Playground Section */
+    .playground-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+      margin-bottom: 28px;
+    }
+
+    .playground-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    @media (max-width: 860px) {
+      .playground-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    select, input[type="text"], input[type="number"], input[type="password"], textarea {
+      width: 100%;
+      padding: 10px 14px;
+      font-size: 0.875rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--bg-subtle);
+      color: var(--text);
+      outline: none;
+      font-family: inherit;
+    }
+
+    select:focus, input:focus, textarea:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 2px var(--primary-light);
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 110px;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+    }
+
+    .prompt-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .preset-pill {
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: 9999px;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .preset-pill:hover {
+      background: var(--primary-light);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    /* Output Console */
+    .output-console {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 350px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+
+    .console-header {
+      padding: 10px 14px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      font-family: var(--font-mono);
+    }
+
+    .console-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .console-body {
+      padding: 14px;
+      flex: 1;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text);
+    }
+
+    .typing-cursor::after {
+      content: "▋";
+      display: inline-block;
+      color: var(--primary);
+      animation: blink 1s step-start infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      padding: 20px;
+    }
+
+    .modal-overlay.active {
+      display: flex;
+    }
+
+    .modal-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      width: 100%;
+      max-width: 580px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-header h2 {
+      font-size: 1.2rem;
+      font-weight: 600;
+    }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .checkbox-row label {
+      margin-bottom: 0;
+      font-size: 0.85rem;
+      cursor: pointer;
+      text-transform: none;
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 18px;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.85rem;
+      z-index: 10000;
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="brand">
+        <div class="logo-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+          </svg>
+        </div>
+        <div class="brand-title">
+          <h1>Accio Gateway Bridge</h1>
+          <p>Local Model Proxy & Gateway Router · v1.0.0</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="status-pill" id="bridgeStatusBadge">
+          <span class="pulse-dot"></span>
+          <span id="bridgeStatusText">Bridge Running</span>
+        </div>
+        <button class="btn btn-sm" id="themeToggleBtn" title="Toggle dark/light theme">
+          <svg id="themeIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"></circle>
+            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>
+          </svg>
+        </button>
+        <button class="btn btn-sm" id="refreshBtn" title="Refresh status">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    <!-- Metrics Overview -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-title">Bridge Server</div>
+        <div class="metric-value" id="metricPort">:8080</div>
+        <div class="metric-sub" id="metricHost">127.0.0.1 · Status: Active</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">Upstream Gateway</div>
+        <div class="metric-value" style="font-size: 1.15rem; font-weight: 600;" id="metricUpstream">phoenix-gw.alibaba.com</div>
+        <div class="metric-sub">Official model requests transparently forwarded</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">Custom Models</div>
+        <div class="metric-value" id="metricModelsCount">--</div>
+        <div class="metric-sub" id="metricModelsSub">0 enabled for Accio</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">Client Entitlement</div>
+        <div class="metric-value" style="color: var(--success); font-size: 1.25rem;">Unlocked & Free</div>
+        <div class="metric-sub">locked: false · freeUse: true</div>
+      </div>
+    </div>
+    <!-- Accio Work Detection & Smart Launcher -->
+    <div class="launcher-card" id="accioEditionCard" style="margin-bottom: 1.5rem; border: 1px solid var(--border-color); background: var(--bg-card);">
+      <div class="launcher-header" style="flex-wrap: wrap; gap: 0.85rem; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 0.85rem;">
+          <div style="width: 40px; height: 40px; border-radius: 10px; background: rgba(59, 130, 246, 0.12); display: flex; align-items: center; justify-content: center; color: var(--primary);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+              <span style="font-weight: 700; font-size: 1.05rem;">Accio Work 客户端识别</span>
+              <span class="badge" id="accioEditionBadge" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">检测中...</span>
+              <span class="badge" id="accioRunningBadge" style="font-size: 0.75rem; padding: 0.2rem 0.6rem; display: none;">运行中</span>
+              <span class="badge" id="accioLoginBadge" style="font-size: 0.75rem; padding: 0.2rem 0.6rem; display: none;">已配置账号</span>
+            </div>
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;" id="accioPathSub">
+              正在扫描系统安装路径与版本特征...
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-left: auto;">
+          <button class="btn btn-sm" id="toggleEvidenceBtn" onclick="toggleEvidenceView()" style="display: none;">
+            判定依据 (<span id="evidenceCount">0</span>)
+          </button>
+          <button class="btn btn-sm btn-primary" id="launchAccioBtn" onclick="launchAccioClient()" disabled>
+            一键启动并接管
+          </button>
+        </div>
+      </div>
+
+      <!-- Collapsible Evidence Panel -->
+      <div id="evidencePanel" style="display: none; padding-top: 0.85rem; border-top: 1px dashed var(--border-color); margin-top: 0.85rem;">
+        <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+          <span>版本判定证据链（基于本地文件与注册信息）：</span>
+          <span id="evidenceScores" style="font-family: monospace;">CN: 0 | Global: 0</span>
+        </div>
+        <div id="evidenceList" style="display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.8rem;"></div>
+      </div>
+    </div>
+
+
+    <!-- Quick Launcher Instructions -->
+    <div class="launcher-card">
+      <div class="launcher-header">
+        <div class="launcher-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          Quick Launch Accio Desktop
+        </div>
+        <div class="tab-pills">
+          <button class="tab-pill active" onclick="switchLauncherTab('cmd')">CMD (Batch)</button>
+          <button class="tab-pill" onclick="switchLauncherTab('ps1')">PowerShell</button>
+          <button class="tab-pill" onclick="switchLauncherTab('files')">1-Click Launchers</button>
+        </div>
+      </div>
+
+      <div id="cmdTabContent" class="code-box">
+        <span class="code-content" id="cmdCode">set GATEWAY_BASE_URL=http://127.0.0.1:8080 && start "" "%LOCALAPPDATA%\Programs\Accio\Accio.exe"</span>
+        <button class="btn btn-sm" onclick="copySnippet('cmdCode')">Copy</button>
+      </div>
+
+      <div id="ps1TabContent" class="code-box" style="display: none;">
+        <span class="code-content" id="ps1Code">$env:GATEWAY_BASE_URL="http://127.0.0.1:8080"; & "$env:LOCALAPPDATA\Programs\Accio\Accio.exe"</span>
+        <button class="btn btn-sm" onclick="copySnippet('ps1Code')">Copy</button>
+      </div>
+
+      <div id="filesTabContent" class="code-box" style="display: none;">
+        <span class="code-content">Double-click <strong>start-all.bat</strong> or <strong>launch-accio.bat</strong> in project root</span>
+        <span class="badge badge-provider">Convenience</span>
+      </div>
+
+      <div class="launcher-note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        Keep this bridge server running in background. Accio client will connect to <code>http://127.0.0.1:8080</code> and load your custom models in the model selector.
+      </div>
+    </div>
+
+    <!-- Models Management Section -->
+    <div class="section-header">
+      <div class="section-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+          <line x1="8" y1="21" x2="16" y2="21"></line>
+          <line x1="12" y1="17" x2="12" y2="21"></line>
+        </svg>
+        Configured Custom Models
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="openAddModelModal()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          Add Custom Model
+        </button>
+      </div>
+    </div>
+
+    <div class="models-table-card">
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Provider</th>
+              <th>Base URL</th>
+              <th>Context</th>
+              <th>Streaming</th>
+              <th>Active</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="modelsTableBody">
+            <tr>
+              <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">Loading configured models...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Live Test Playground -->
+    <div class="section-header">
+      <div class="section-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+        </svg>
+        Live Test Playground
+      </div>
+    </div>
+
+    <div class="playground-card">
+      <div class="playground-grid">
+        <!-- Input Column -->
+        <div>
+          <div class="form-group">
+            <label for="playModelSelect">Target Model</label>
+            <select id="playModelSelect"></select>
+          </div>
+
+          <div class="form-group">
+            <label for="playPrompt">Test Prompt</label>
+            <textarea id="playPrompt" placeholder="Enter a test prompt to send through the bridge...">Say hello and identify which model you are running.</textarea>
+            <div class="prompt-presets">
+              <span class="preset-pill" onclick="setPlayPrompt('Say hello and identify which model you are running.')">Identify Model</span>
+              <span class="preset-pill" onclick="setPlayPrompt('Write a Python function to check if a string is a palindrome.')">Python Palindrome</span>
+              <span class="preset-pill" onclick="setPlayPrompt('Explain quantum entanglement in exactly 2 sentences.')">Quantum in 2 Sentences</span>
+              <span class="preset-pill" onclick="setPlayPrompt('CALL_TOOL: read_file path=test.txt')">Simulate Tool Call</span>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="playTemp">Temperature: <span id="tempValue">0.7</span></label>
+              <input type="range" id="playTemp" min="0" max="1" step="0.1" value="0.7" oninput="document.getElementById('tempValue').innerText = this.value" style="width: 100%;" />
+            </div>
+            <div class="form-group">
+              <label for="playMaxTokens">Max Tokens</label>
+              <input type="number" id="playMaxTokens" value="512" min="1" max="8192" />
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <button class="btn btn-primary" id="sendPromptBtn" onclick="runPlaygroundTest()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+              Send Test Prompt (SSE Stream)
+            </button>
+            <button class="btn" onclick="clearPlayground()">Clear</button>
+          </div>
+        </div>
+
+        <!-- Output Column -->
+        <div>
+          <div class="output-console">
+            <div class="console-header">
+              <div class="console-status">
+                <span id="consoleStatusText">Ready for test</span>
+              </div>
+              <div id="consoleMetrics" style="color: var(--text-muted); font-size: 0.75rem;">
+                TTFT: -- ms · Total: -- ms
+              </div>
+            </div>
+            <div class="console-body" id="consoleOutput">Waiting for prompt... Click 'Send Test Prompt' above to test your model.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Model Modal -->
+  <div class="modal-overlay" id="modelModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modalTitle">Add Custom Model</h2>
+        <button class="btn btn-sm" onclick="closeModelModal()">&times;</button>
+      </div>
+
+      <!-- Presets -->
+      <div class="form-group">
+        <label>Quick Fill Presets</label>
+        <div class="prompt-presets">
+          <span class="preset-pill" onclick="fillPreset('ollama')">Ollama Local (:11434)</span>
+          <span class="preset-pill" onclick="fillPreset('lmstudio')">LM Studio (:1234)</span>
+          <span class="preset-pill" onclick="fillPreset('vllm')">vLLM (:8000)</span>
+          <span class="preset-pill" onclick="fillPreset('openai')">OpenAI Hosted</span>
+          <span class="preset-pill" onclick="fillPreset('openrouter')">OpenRouter</span>
+        </div>
+      </div>
+
+      <form id="modelForm" onsubmit="handleModelSubmit(event)">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="modalModelId">Model ID / Code *</label>
+            <input type="text" id="modalModelId" required placeholder="e.g. deepseek-r1:14b" />
+          </div>
+          <div class="form-group">
+            <label for="modalDisplayName">Display Name *</label>
+            <input type="text" id="modalDisplayName" required placeholder="e.g. DeepSeek R1 14B" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="modalProvider">Provider Type</label>
+            <select id="modalProvider">
+              <option value="openai">OpenAI-Compatible (LM Studio / vLLM / etc.)</option>
+              <option value="ollama">Ollama (Native /api/chat)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="modalUpstreamModel">Upstream Model Name</label>
+            <input type="text" id="modalUpstreamModel" placeholder="Same as Model ID if empty" />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="modalBaseUrl">Base URL *</label>
+          <input type="text" id="modalBaseUrl" required placeholder="http://127.0.0.1:11434 or http://127.0.0.1:1234/v1" />
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="modalApiKey">API Key</label>
+            <input type="password" id="modalApiKey" placeholder="Leave empty if not required" />
+          </div>
+          <div class="form-group">
+            <label for="modalContextWindow">Context Window</label>
+            <input type="number" id="modalContextWindow" value="131072" />
+          </div>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="modalStream" checked />
+          <label for="modalStream">Enable Streaming Mode (Server-Sent Events / SSE)</label>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="modalMultimodal" />
+          <label for="modalMultimodal">Supports Multimodal / Vision</label>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="modalEnabled" checked />
+          <label for="modalEnabled">Enabled for Accio Desktop</label>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="modalIsDefault" />
+          <label for="modalIsDefault">Set as Default Custom Model</label>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn" onclick="closeModelModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="saveModelBtn">Save Model</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast" id="toastNotification">
+    <span id="toastMessage">Notification</span>
+  </div>
+
+  <script>
+    // Global state
+    let state = {
+      models: [],
+      server: { port: 8080, host: '127.0.0.1' },
+      upstream: 'https://phoenix-gw.alibaba.com',
+      editingModelId: null,
+      activeTestAbortController: null,
+    };
+
+    // Dark/Light Theme Support
+    function initTheme() {
+      const savedTheme = localStorage.getItem('accio_bridge_theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', savedTheme);
+      updateThemeIcon(savedTheme);
+    }
+
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('accio_bridge_theme', next);
+      updateThemeIcon(next);
+    }
+
+    function updateThemeIcon(theme) {
+      const icon = document.getElementById('themeIcon');
+      if (theme === 'light') {
+        icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>';
+      } else {
+        icon.innerHTML = '<circle cx="12" cy="12" r="5"></circle><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>';
+      }
+    }
+
+    document.getElementById('themeToggleBtn').addEventListener('click', toggleTheme);
+    document.getElementById('refreshBtn').addEventListener('click', loadStatus);
+
+    // Toast
+    function showToast(message) {
+      const toast = document.getElementById('toastNotification');
+      document.getElementById('toastMessage').innerText = message;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    // Quick Launch Tabs
+    function switchLauncherTab(type) {
+      document.querySelectorAll('.tab-pill').forEach((p) => p.classList.remove('active'));
+      document.getElementById('cmdTabContent').style.display = 'none';
+      document.getElementById('ps1TabContent').style.display = 'none';
+      document.getElementById('filesTabContent').style.display = 'none';
+
+      if (type === 'cmd') {
+        document.querySelectorAll('.tab-pill')[0].classList.add('active');
+        document.getElementById('cmdTabContent').style.display = 'flex';
+      } else if (type === 'ps1') {
+        document.querySelectorAll('.tab-pill')[1].classList.add('active');
+        document.getElementById('ps1TabContent').style.display = 'flex';
+      } else {
+        document.querySelectorAll('.tab-pill')[2].classList.add('active');
+        document.getElementById('filesTabContent').style.display = 'flex';
+      }
+    }
+
+    function copySnippet(elementId) {
+      const text = document.getElementById(elementId).innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        showToast('Command copied to clipboard!');
+      });
+    }
+    // -----------------------------------------------------------------------
+    // Accio Work Client Edition & Launch
+    // -----------------------------------------------------------------------
+    let currentAccioInfo = null;
+
+    async function loadAccioEdition(force = false) {
+      try {
+        const res = await fetch('/api/bridge/accio' + (force ? '?force=true' : ''));
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.accio) {
+          currentAccioInfo = data.accio;
+          renderAccioUI(data.accio, data.bridgeGatewayUrl);
+        }
+      } catch (err) {
+        console.warn('Failed to load Accio edition:', err);
+      }
+    }
+
+    function renderAccioUI(info, bridgeUrl) {
+      const editionBadge = document.getElementById('accioEditionBadge');
+      const runningBadge = document.getElementById('accioRunningBadge');
+      const loginBadge = document.getElementById('accioLoginBadge');
+      const pathSub = document.getElementById('accioPathSub');
+      const launchBtn = document.getElementById('launchAccioBtn');
+      const toggleEvidenceBtn = document.getElementById('toggleEvidenceBtn');
+      const evidenceCount = document.getElementById('evidenceCount');
+      const evidenceScores = document.getElementById('evidenceScores');
+      const evidenceList = document.getElementById('evidenceList');
+
+      if (!info || !info.installed) {
+        editionBadge.innerText = '未安装';
+        editionBadge.className = 'badge badge-default';
+        editionBadge.style.background = 'rgba(156, 163, 175, 0.2)';
+        editionBadge.style.color = 'var(--text-muted)';
+        runningBadge.style.display = 'none';
+        loginBadge.style.display = 'none';
+        pathSub.innerText = '未在标准路径发现 Accio.exe。可访问官网下载：https://www.accio-ai.com/work';
+        launchBtn.disabled = true;
+        launchBtn.innerText = '客户端未安装';
+        toggleEvidenceBtn.style.display = 'none';
+        return;
+      }
+
+      if (info.edition === 'cn') {
+        editionBadge.innerText = 'Accio Work 中国版';
+        editionBadge.className = 'badge badge-active';
+        editionBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+        editionBadge.style.color = 'var(--success)';
+        editionBadge.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+      } else if (info.edition === 'global') {
+        editionBadge.innerText = 'Accio Work 国际版';
+        editionBadge.className = 'badge badge-provider';
+        editionBadge.style.background = 'rgba(59, 130, 246, 0.15)';
+        editionBadge.style.color = '#3b82f6';
+      } else {
+        editionBadge.innerText = '未知版本';
+        editionBadge.className = 'badge badge-default';
+      }
+
+      if (info.running) {
+        runningBadge.style.display = 'inline-block';
+        runningBadge.innerText = `运行中 (PID: ${info.runningPids.slice(0, 2).join(',')})`;
+        runningBadge.style.background = 'rgba(234, 179, 8, 0.15)';
+        runningBadge.style.color = '#eab308';
+        launchBtn.innerText = '重启并切换至此网关';
+      } else {
+        runningBadge.style.display = 'none';
+        launchBtn.innerText = '一键启动并接管';
+      }
+
+      if (info.signedIn) {
+        loginBadge.style.display = 'inline-block';
+        loginBadge.innerText = `${info.accountCount} 个本地配置账号`;
+      } else {
+        loginBadge.style.display = 'none';
+      }
+
+      pathSub.innerText = `${info.path} · 版本: v${info.version || '0.35.3'}${info.gatewayPort ? ` · 本地服务端口: ${info.gatewayPort}` : ''}`;
+      launchBtn.disabled = false;
+
+      if (info.evidence && info.evidence.length > 0) {
+        toggleEvidenceBtn.style.display = 'inline-flex';
+        evidenceCount.innerText = info.evidence.length;
+        if (info.scores) {
+          evidenceScores.innerText = `判定得分: CN = ${info.scores.cn} | Global = ${info.scores.global}`;
+        }
+        evidenceList.innerHTML = info.evidence.map((ev) => `
+          <div style="display: flex; align-items: baseline; gap: 0.5rem; background: var(--bg-hover); padding: 0.35rem 0.6rem; border-radius: 4px;">
+            <span class="badge" style="font-size: 0.7rem; padding: 0.1rem 0.35rem; ${ev.targetEdition === 'cn' ? 'background: rgba(16,185,129,0.15); color: var(--success);' : ev.targetEdition === 'global' ? 'background: rgba(59,130,246,0.15); color: #3b82f6;' : 'background: rgba(156,163,175,0.15);'}">${ev.targetEdition === 'cn' ? '中国版依据' : ev.targetEdition === 'global' ? '国际版依据' : '提示'}</span>
+            <code style="font-size: 0.75rem; color: var(--primary);">${escapeHtml(ev.source)} [${escapeHtml(ev.field)}]</code>
+            <span style="color: var(--text-color); flex: 1;">${escapeHtml(ev.description)}</span>
+            <span style="color: var(--text-muted); font-size: 0.75rem; font-family: monospace;">${escapeHtml(String(ev.value))}</span>
+          </div>
+        `).join('');
+      } else {
+        toggleEvidenceBtn.style.display = 'none';
+      }
+    }
+
+    function toggleEvidenceView() {
+      const p = document.getElementById('evidencePanel');
+      p.style.display = p.style.display === 'none' ? 'block' : 'none';
+    }
+
+    async function launchAccioClient(force = false) {
+      const btn = document.getElementById('launchAccioBtn');
+      if (currentAccioInfo && currentAccioInfo.running && !force) {
+        if (!confirm('Accio Work 客户端当前正在运行。\\n\\n由于 GATEWAY_BASE_URL 需要在应用启动前注入，建议先退出正在运行的 Accio，然后再启动。\\n\\n是否强行拉起新实例？')) {
+          return;
+        }
+        force = true;
+      } else if (currentAccioInfo && currentAccioInfo.edition !== 'cn' && !force) {
+        if (!confirm(`检测到当前客户端为【${currentAccioInfo.editionLabel}】而非中国版。\\n\\nBridge 兼容所有版本，是否继续启动？`)) {
+          return;
+        }
+        force = true;
+      }
+
+      btn.disabled = true;
+      btn.innerText = '正在启动...';
+      try {
+        const res = await fetch('/api/bridge/accio/launch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast(`已成功启动 Accio Work (PID: ${data.pid})，已注入 GATEWAY_BASE_URL！`);
+          setTimeout(() => loadAccioEdition(true), 2500);
+        } else {
+          showToast(`启动提示: ${data.error || '未能启动'}`);
+        }
+      } catch (err) {
+        showToast('启动请求失败: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = (currentAccioInfo && currentAccioInfo.running) ? '重启并切换至此网关' : '一键启动并接管';
+      }
+    }
+
+
+    // Load Status & Models
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/bridge/status');
+        if (!res.ok) throw new Error('Status HTTP ' + res.status);
+        const data = await res.json();
+        state.models = data.models || [];
+        state.server = data.server || state.server;
+        state.upstream = data.upstream || state.upstream;
+
+        renderStatusUI();
+        renderModelsTable();
+        updatePlaygroundModels();
+        loadAccioEdition();
+      } catch (err) {
+        document.getElementById('bridgeStatusText').innerText = 'Reconnecting...';
+        document.getElementById('bridgeStatusBadge').style.borderColor = 'var(--danger)';
+        document.getElementById('bridgeStatusBadge').style.color = 'var(--danger)';
+      }
+    }
+
+    function renderStatusUI() {
+      document.getElementById('bridgeStatusText').innerText = 'Bridge Running';
+      document.getElementById('bridgeStatusBadge').style.borderColor = 'rgba(16, 185, 129, 0.25)';
+      document.getElementById('bridgeStatusBadge').style.color = 'var(--success)';
+
+      document.getElementById('metricPort').innerText = ':' + (state.server.port || 8080);
+      document.getElementById('metricHost').innerText = (state.server.host || '127.0.0.1') + ' · Status: Active';
+      document.getElementById('metricUpstream').innerText = state.upstream.replace(/^https?:\/\//, '');
+
+      const activeCount = state.models.filter((m) => m.enabled).length;
+      document.getElementById('metricModelsCount').innerText = activeCount + ' / ' + state.models.length;
+      document.getElementById('metricModelsSub').innerText = activeCount + ' active custom model' + (activeCount === 1 ? '' : 's');
+
+      // Update snippet code with detected port
+      const port = state.server.port || 8080;
+      document.getElementById('cmdCode').innerText = `set GATEWAY_BASE_URL=http://127.0.0.1:${port} && start "" "%LOCALAPPDATA%\\Programs\\Accio\\Accio.exe"`;
+      document.getElementById('ps1Code').innerText = `$env:GATEWAY_BASE_URL="http://127.0.0.1:${port}"; & "$env:LOCALAPPDATA\\Programs\\Accio\\Accio.exe"`;
+    }
+
+    function renderModelsTable() {
+      const tbody = document.getElementById('modelsTableBody');
+      if (state.models.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">No custom models configured. Click "Add Custom Model" to configure Ollama or OpenAI.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = state.models.map((model) => {
+        const streamBadge = model.stream !== false
+          ? '<span class="badge badge-stream">Stream</span>'
+          : '<span class="badge badge-nostream">Non-stream</span>';
+        const defaultBadge = model.isDefault ? '<span class="badge badge-default">Default</span>' : '';
+
+        return `
+          <tr>
+            <td>
+              <div class="model-name-cell">
+                <span class="model-display-name">${escapeHtml(model.displayName || model.id)} ${defaultBadge}</span>
+                <span class="model-id-code">${escapeHtml(model.id)}</span>
+              </div>
+            </td>
+            <td>
+              <span class="badge badge-provider">${escapeHtml(model.provider || 'openai')}</span>
+            </td>
+            <td>
+              <span style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted);">${escapeHtml(model.baseUrl || '')}</span>
+            </td>
+            <td>${Number(model.contextWindow || 0).toLocaleString()}</td>
+            <td>${streamBadge}</td>
+            <td>
+              <label class="switch">
+                <input type="checkbox" ${model.enabled ? 'checked' : ''} onchange="toggleModelEnabled('${escapeHtml(model.id)}', this.checked)">
+                <span class="slider"></span>
+              </label>
+            </td>
+            <td>
+              <div class="table-actions">
+                <button class="btn btn-sm" onclick="selectModelForTest('${escapeHtml(model.id)}')" title="Test model in playground">Play</button>
+                <button class="btn btn-sm" onclick="openEditModelModal('${escapeHtml(model.id)}')" title="Edit model">Edit</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteModel('${escapeHtml(model.id)}')" title="Delete model">&times;</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function updatePlaygroundModels() {
+      const select = document.getElementById('playModelSelect');
+      const previousValue = select.value;
+      const enabledModels = state.models.filter((m) => m.enabled);
+
+      if (enabledModels.length === 0) {
+        select.innerHTML = '<option value="">No enabled custom models</option>';
+        return;
+      }
+
+      select.innerHTML = enabledModels.map((m) => `
+        <option value="${escapeHtml(m.id)}" ${m.id === previousValue || m.isDefault ? 'selected' : ''}>
+          ${escapeHtml(m.displayName || m.id)} (${escapeHtml(m.id)})
+        </option>
+      `).join('');
+    }
+
+    function selectModelForTest(modelId) {
+      const select = document.getElementById('playModelSelect');
+      select.value = modelId;
+      document.querySelector('.playground-card').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    async function toggleModelEnabled(modelId, enabled) {
+      const model = state.models.find((m) => m.id === modelId);
+      if (!model) return;
+      model.enabled = enabled;
+      try {
+        const res = await fetch('/api/bridge/models', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(model),
+        });
+        if (!res.ok) throw new Error('Save failed');
+        showToast(`Model ${model.id} ${enabled ? 'enabled' : 'disabled'}`);
+        loadStatus();
+      } catch (err) {
+        showToast('Failed to update model: ' + err.message);
+        loadStatus();
+      }
+    }
+
+    async function deleteModel(modelId) {
+      if (!confirm(`Are you sure you want to delete model "${modelId}"?`)) return;
+      try {
+        const res = await fetch(`/api/bridge/models?id=${encodeURIComponent(modelId)}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) throw new Error('Delete failed');
+        showToast(`Model ${modelId} deleted`);
+        loadStatus();
+      } catch (err) {
+        showToast('Failed to delete model: ' + err.message);
+      }
+    }
+
+    // The gateway redacts stored keys (`hasKey`), so an untouched key field must omit the
+    // property on save; sending an empty string would clear a key the user never saw.
+    let apiKeyFieldDirty = false;
+    function primeApiKeyField(model) {
+      const field = document.getElementById('modalApiKey');
+      apiKeyFieldDirty = false;
+      field.value = model && typeof model.apiKey === 'string' ? model.apiKey : '';
+      field.placeholder = model && model.hasKey
+        ? '已保存密钥（留空 = 保留；输入新值 = 替换）'
+        : 'Leave empty if not required';
+      field.oninput = () => { apiKeyFieldDirty = true; };
+    }
+    // Modal Operations
+    function openAddModelModal() {
+      state.editingModelId = null;
+      document.getElementById('modalTitle').innerText = 'Add Custom Model';
+      document.getElementById('modelForm').reset();
+      primeApiKeyField(null);
+      document.getElementById('modalModelId').disabled = false;
+      document.getElementById('modalContextWindow').value = 131072;
+      document.getElementById('modalStream').checked = true;
+      document.getElementById('modalEnabled').checked = true;
+      document.getElementById('modelModal').classList.add('active');
+    }
+
+    function openEditModelModal(modelId) {
+      const model = state.models.find((m) => m.id === modelId);
+      if (!model) return;
+      state.editingModelId = modelId;
+      document.getElementById('modalTitle').innerText = 'Edit Custom Model';
+      document.getElementById('modalModelId').value = model.id;
+      document.getElementById('modalModelId').disabled = true;
+      document.getElementById('modalDisplayName').value = model.displayName || '';
+      document.getElementById('modalProvider').value = model.provider || 'openai';
+      document.getElementById('modalBaseUrl').value = model.baseUrl || '';
+      document.getElementById('modalUpstreamModel').value = model.upstreamModel || '';
+      primeApiKeyField(model);
+      document.getElementById('modalContextWindow').value = model.contextWindow || 131072;
+      document.getElementById('modalStream').checked = model.stream !== false;
+      document.getElementById('modalMultimodal').checked = model.multimodal === true;
+      document.getElementById('modalEnabled').checked = model.enabled !== false;
+      document.getElementById('modalIsDefault').checked = model.isDefault === true;
+      document.getElementById('modelModal').classList.add('active');
+    }
+
+    function closeModelModal() {
+      document.getElementById('modelModal').classList.remove('active');
+    }
+
+    function fillPreset(preset) {
+      if (preset === 'ollama') {
+        document.getElementById('modalProvider').value = 'ollama';
+        document.getElementById('modalBaseUrl').value = 'http://127.0.0.1:11434';
+        if (!document.getElementById('modalModelId').value) {
+          document.getElementById('modalModelId').value = 'deepseek-r1:14b';
+          document.getElementById('modalDisplayName').value = 'DeepSeek R1 14B (Ollama)';
+        }
+      } else if (preset === 'lmstudio') {
+        document.getElementById('modalProvider').value = 'openai';
+        document.getElementById('modalBaseUrl').value = 'http://127.0.0.1:1234/v1';
+        document.getElementById('modalApiKey').value = 'not-needed';
+        apiKeyFieldDirty = true;
+        if (!document.getElementById('modalModelId').value) {
+          document.getElementById('modalModelId').value = 'qwen2.5-coder-7b';
+          document.getElementById('modalDisplayName').value = 'Qwen2.5 Coder 7B (LM Studio)';
+        }
+      } else if (preset === 'vllm') {
+        document.getElementById('modalProvider').value = 'openai';
+        document.getElementById('modalBaseUrl').value = 'http://127.0.0.1:8000/v1';
+        document.getElementById('modalApiKey').value = '';
+        apiKeyFieldDirty = true;
+      } else if (preset === 'openai') {
+        document.getElementById('modalProvider').value = 'openai';
+        document.getElementById('modalBaseUrl').value = 'https://api.openai.com/v1';
+        if (!document.getElementById('modalModelId').value) {
+          document.getElementById('modalModelId').value = 'gpt-4o-mini';
+          document.getElementById('modalDisplayName').value = 'GPT-4o mini (OpenAI)';
+        }
+      } else if (preset === 'openrouter') {
+        document.getElementById('modalProvider').value = 'openai';
+        document.getElementById('modalBaseUrl').value = 'https://openrouter.ai/api/v1';
+      }
+    }
+
+    async function handleModelSubmit(event) {
+      event.preventDefault();
+      const apiKeyStored = state.editingModelId
+        ? Boolean((state.models.find((m) => m.id === state.editingModelId) || {}).hasKey)
+        : false;
+      const modelPayload = {
+        id: document.getElementById('modalModelId').value.trim(),
+        displayName: document.getElementById('modalDisplayName').value.trim(),
+        provider: document.getElementById('modalProvider').value,
+        baseUrl: document.getElementById('modalBaseUrl').value.trim(),
+        upstreamModel: document.getElementById('modalUpstreamModel').value.trim() || undefined,
+        ...(apiKeyFieldDirty || !apiKeyStored ? { apiKey: document.getElementById('modalApiKey').value } : {}),
+        contextWindow: Number(document.getElementById('modalContextWindow').value) || 131072,
+        stream: document.getElementById('modalStream').checked,
+        multimodal: document.getElementById('modalMultimodal').checked,
+        enabled: document.getElementById('modalEnabled').checked,
+        isDefault: document.getElementById('modalIsDefault').checked,
+        freeUse: true,
+        locked: false,
+      };
+
+      try {
+        const res = await fetch('/api/bridge/models', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(modelPayload),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || 'Save failed');
+        }
+        closeModelModal();
+        showToast(`Model ${modelPayload.id} saved successfully!`);
+        loadStatus();
+      } catch (err) {
+        alert('Failed to save model: ' + err.message);
+      }
+    }
+
+    // Live Test Playground
+    function setPlayPrompt(text) {
+      document.getElementById('playPrompt').value = text;
+    }
+
+    function clearPlayground() {
+      document.getElementById('consoleOutput').innerText = 'Output cleared.';
+      document.getElementById('consoleStatusText').innerText = 'Ready for test';
+      document.getElementById('consoleMetrics').innerText = 'TTFT: -- ms · Total: -- ms';
+    }
+
+    async function runPlaygroundTest() {
+      const modelId = document.getElementById('playModelSelect').value;
+      if (!modelId) {
+        alert('Please select or configure an active model first.');
+        return;
+      }
+
+      const prompt = document.getElementById('playPrompt').value.trim();
+      if (!prompt) {
+        alert('Please enter a prompt to send.');
+        return;
+      }
+
+      const temp = Number(document.getElementById('playTemp').value) || 0.7;
+      const sendBtn = document.getElementById('sendPromptBtn');
+      const consoleOutput = document.getElementById('consoleOutput');
+      const statusText = document.getElementById('consoleStatusText');
+      const metricsText = document.getElementById('consoleMetrics');
+
+      // Abort previous if any
+      if (state.activeTestAbortController) {
+        state.activeTestAbortController.abort();
+      }
+
+      const controller = new AbortController();
+      state.activeTestAbortController = controller;
+
+      sendBtn.disabled = true;
+      statusText.innerText = 'Connecting to bridge...';
+      consoleOutput.innerText = '';
+      consoleOutput.classList.add('typing-cursor');
+
+      const startTime = performance.now();
+      let ttftRecorded = false;
+      let ttftMs = 0;
+      let chunkCount = 0;
+      let accumulatedText = '';
+
+      try {
+        // Send request in Accio GenAI format to test the exact bridge translation path
+        const payload = {
+          model: modelId,
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: prompt }],
+            },
+          ],
+          generationConfig: {
+            temperature: temp,
+          },
+        };
+
+        const res = await fetch('/api/adk/llm/generateContent', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errText.slice(0, 300)}`);
+        }
+
+        statusText.innerText = 'Streaming response...';
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop(); // keep remainder
+
+          for (const block of lines) {
+            const trimmed = block.trim();
+            if (!trimmed.startsWith('data:')) continue;
+
+            const jsonStr = trimmed.slice(5).trim();
+            if (jsonStr === '[DONE]') continue;
+
+            let frame;
+            try {
+              frame = JSON.parse(jsonStr);
+            } catch {
+              continue;
+            }
+
+            chunkCount++;
+            if (!ttftRecorded) {
+              ttftRecorded = true;
+              ttftMs = Math.round(performance.now() - startTime);
+              metricsText.innerText = `TTFT: ${ttftMs} ms · Streaming...`;
+            }
+
+            // Extract parts or text
+            if (frame.content && Array.isArray(frame.content.parts)) {
+              for (const part of frame.content.parts) {
+                if (typeof part.text === 'string') {
+                  accumulatedText += part.text;
+                  consoleOutput.innerText = accumulatedText;
+                }
+                if (part.functionCall) {
+                  accumulatedText += `\n[Tool Call: ${part.functionCall.name}(${JSON.stringify(part.functionCall.args)})]\n`;
+                  consoleOutput.innerText = accumulatedText;
+                }
+              }
+            }
+
+            if (frame.error) {
+              accumulatedText += `\n[Error from bridge: ${frame.error.message || JSON.stringify(frame.error)}]`;
+              consoleOutput.innerText = accumulatedText;
+            }
+          }
+        }
+
+        const totalMs = Math.round(performance.now() - startTime);
+        statusText.innerText = 'Stream completed';
+        metricsText.innerText = `TTFT: ${ttftMs || totalMs} ms · Total: ${totalMs} ms (${chunkCount} frames)`;
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          statusText.innerText = 'Request aborted';
+        } else {
+          statusText.innerText = 'Request failed';
+          consoleOutput.innerText += `\n[Playground Error]: ${err.message}`;
+        }
+      } finally {
+        consoleOutput.classList.remove('typing-cursor');
+        sendBtn.disabled = false;
+        state.activeTestAbortController = null;
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    // Startup
+    initTheme();
+    loadStatus();
+    setInterval(loadStatus, 10000);
+  </script>
+</body>
+</html>

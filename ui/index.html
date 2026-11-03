@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Accio Bridge</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <aside>
+      <div class="brand">
+        <span class="logo">A</span>
+        <div>ACCIO BRIDGE<small>你的模型 · 你的选择</small></div>
+      </div>
+      <nav aria-label="主导航">
+        <button class="selected" data-view="models">◈　模型工作台</button
+        ><button data-view="providers">▧　服务商分组</button
+        ><button data-view="settings">⚙　网关设置</button
+        ><button data-view="diagnostics">⌁　连接诊断</button>
+      </nav>
+      <div class="aside-bottom">
+        <span class="dot"></span> Rust 原生网关<small
+          >本地管理 · 密钥不回显</small
+        >
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">LOCAL MODEL GATEWAY</p>
+          <h1 id="title">模型工作台</h1>
+          <p class="muted">把你选择的模型，接入 Accio。</p>
+        </div>
+        <button id="refresh" class="secondary">↻ 刷新状态</button>
+      </header>
+      <div id="notice" role="status" aria-live="polite" hidden></div>
+      <section id="connection" class="panel" hidden>
+        <h2>连接开发网关</h2>
+        <p class="muted">
+          浏览器预览需手动连接本机网关。管理令牌仅在当前页面内存中使用。
+        </p>
+        <form id="connect-form" class="inline">
+          <label
+            >端口<input
+              id="port"
+              type="number"
+              min="1"
+              max="65535"
+              value="8080"
+              required /></label
+          ><label
+            >管理令牌<input
+              id="token"
+              type="password"
+              autocomplete="off" /></label
+          ><button>连接</button
+          ><button id="disconnect" type="button" class="secondary">
+            断开 / 清除令牌
+          </button>
+        </form>
+      </section>
+      <div class="stats">
+        <div>
+          <small>运行状态</small><strong id="health">连接中…</strong
+          ><span id="address">等待本地网关</span>
+        </div>
+        <div>
+          <small>已配置模型</small><strong id="count">—</strong
+          ><span>独立的上游与密钥</span>
+        </div>
+        <div>
+          <small>已启用模型</small><strong id="active">—</strong
+          ><span>可在 Accio 模型列表选择</span>
+        </div>
+      </div>
+      <section id="models-view">
+        <div class="section-heading">
+          <div>
+            <h2>模型与服务商</h2>
+            <p class="muted">按模型配置协议和接口；启用后供 Accio 选择。</p>
+          </div>
+          <button id="add">＋ 添加模型</button>
+        </div>
+        <div class="toolbar">
+          <input
+            id="search"
+            type="search"
+            placeholder="搜索名称、模型或服务商"
+            aria-label="搜索模型"
+          /><span id="result-count" class="muted"></span>
+        </div>
+        <div id="models" class="model-grid" aria-live="polite"></div>
+      </section>
+      <section id="providers-view" hidden>
+        <div class="section-heading">
+          <div>
+            <h2>服务商分组</h2>
+            <p class="muted">
+              相同协议、地址与密钥自动归组。组编辑会影响组内全部模型。
+            </p>
+          </div>
+          <button id="add-provider">＋ 添加服务商模型</button>
+        </div>
+        <div id="providers" class="model-grid"></div>
+      </section>
+      <section id="settings-view" class="panel" hidden>
+        <h2>网关设置</h2>
+        <p class="muted">
+          只编辑非敏感选项。运行地址由桌面端管理；密钥请在模型编辑器中单独修改。
+        </p>
+        <form id="settings-form">
+          <div id="settings-fields"></div>
+          <button id="save-settings">保存设置</button>
+        </form>
+        <p class="hint">
+          配置文件包含上游密钥，当前版本并非系统钥匙串加密存储。请保护本机账户和备份。
+        </p>
+      </section>
+      <section id="diagnostics-view" class="panel" hidden>
+        <h2>本地诊断</h2>
+        <p class="muted">
+          只检查本地管理服务，不向模型发送请求，不产生模型费用。
+        </p>
+        <button id="diagnose">运行检查</button>
+        <ul id="checks" class="checks">
+          <li>尚未检查</li>
+        </ul>
+        <hr />
+        <h2>发现本机模型服务</h2>
+        <p class="muted">
+          仅在点击后探测有限的回环端口，不发送密钥或推理请求。
+        </p>
+        <button id="discover">扫描本机服务</button>
+        <div id="discovered" class="checks"></div>
+        <hr />
+        <h2>Accio 接入</h2>
+        <p class="muted">
+          检查安装与进程状态；启动前需要单独确认，不自动登录或关闭已有进程。
+        </p>
+        <button id="inspect-accio">检查 Accio</button
+        ><button id="launch-accio" class="secondary" disabled>
+          启动并连接网关
+        </button>
+        <p id="accio-status" class="muted">尚未检查。</p>
+        <div class="hint">
+          本工具不会修改 Accio 安装目录或自动登录。真实 Accio 接入与 Windows
+          打包须在目标机器验证。
+        </div>
+      </section>
+      <footer>
+        独立实现 · 不绑定任何 API 服务商 <span id="version"></span>
+      </footer>
+    </main>
+    <dialog id="editor">
+      <form id="model-form">
+        <div class="dialog-head">
+          <div>
+            <p class="eyebrow">MODEL CONFIGURATION</p>
+            <h2 id="editor-title">添加模型</h2>
+          </div>
+          <button
+            type="button"
+            id="close-editor"
+            class="icon"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </div>
+        <div id="editor-error" role="alert" hidden></div>
+        <div class="form-grid">
+          <label
+            >模型 ID<input
+              name="id"
+              required
+              maxlength="128"
+              placeholder="my-model" /></label
+          ><label
+            >显示名称<input
+              name="displayName"
+              maxlength="128"
+              placeholder="我的模型" /></label
+          ><label
+            >服务协议<select name="provider">
+              <option value="openai">OpenAI</option>
+              <option value="openai-compatible">OpenAI 兼容</option>
+              <option value="ollama">Ollama</option>
+              <option value="azure">Azure OpenAI</option>
+            </select></label
+          ><label
+            >上游模型名<input
+              name="upstreamModel"
+              required
+              placeholder="由服务商提供" /></label
+          ><label class="wide"
+            >接口地址<input
+              name="baseUrl"
+              type="url"
+              required
+              placeholder="https://api.example.com/v1" /></label
+          ><label class="wide"
+            >别名（逗号分隔）<input name="aliases" placeholder="可选" /></label
+          ><label
+            >密钥处理<select name="keyMode">
+              <option value="keep">保留现有密钥</option>
+              <option value="replace">输入新密钥</option>
+              <option value="clear">明确清空密钥</option>
+            </select></label
+          ><label
+            >API Key<input
+              name="apiKey"
+              type="password"
+              autocomplete="new-password"
+              disabled
+              placeholder="密钥不回显" /></label
+          ><label class="check"
+            ><input name="enabled" type="checkbox" checked />启用模型</label
+          ><label class="check"
+            ><input name="stream" type="checkbox" checked />流式响应</label
+          >
+        </div>
+        <p class="hint" id="key-hint">
+          密钥仅在保存时发送；不会显示已保存密钥。
+        </p>
+        <div class="dialog-actions">
+          <button type="button" id="cancel-editor" class="secondary">
+            取消</button
+          ><button id="save-model">保存模型</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="delete-dialog">
+      <h2>删除这个模型？</h2>
+      <p id="delete-name"></p>
+      <p class="muted">只删除本地配置，不删除服务商账号。此操作不可撤销。</p>
+      <div class="dialog-actions">
+        <button id="cancel-delete" class="secondary">取消</button
+        ><button id="confirm-delete" class="danger">删除模型</button>
+      </div>
+    </dialog>
+    <dialog id="group-editor">
+      <form id="group-form">
+        <h2>编辑服务商分组</h2>
+        <p id="group-description" class="muted"></p>
+        <div id="group-error" role="alert" hidden></div>
+        <div class="form-grid">
+          <label class="wide"
+            >接口地址<input name="baseUrl" type="url" required /></label
+          ><label
+            >密钥处理<select name="keyMode">
+              <option value="keep">保留密钥</option>
+              <option value="replace">输入新密钥</option>
+              <option value="clear">明确清空密钥</option>
+            </select></label
+          ><label
+            >新 API Key<input
+              name="apiKey"
+              type="password"
+              autocomplete="new-password"
+              disabled
+          /></label>
+        </div>
+        <p class="hint">
+          更改地址时必须重新提供或明确清空已保存密钥。此处不会更改组内模型名称。
+        </p>
+        <div class="dialog-actions">
+          <button id="cancel-group" type="button" class="secondary">取消</button
+          ><button id="save-group">保存整组</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="launch-dialog">
+      <h2>启动 Accio 并连接本地网关？</h2>
+      <p class="muted">
+        这会在你的电脑上启动已检测到的 Accio 程序，并设置
+        GATEWAY_BASE_URL。不会自动登录、发送模型请求或关闭其他进程。
+      </p>
+      <p id="launch-warning" class="hint"></p>
+      <label class="check"
+        ><input
+          id="force-launch"
+          type="checkbox"
+        />我了解发行版本未知或已有进程的风险，仍继续启动</label
+      >
+      <div class="dialog-actions">
+        <button id="cancel-launch" class="secondary">取消</button
+        ><button id="confirm-launch">确认启动</button>
+      </div>
+    </dialog>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

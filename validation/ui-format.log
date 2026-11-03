@@ -1,0 +1,6 @@
+
+> accio-bridge-ui@0.1.0 check
+> prettier --check *.js *.mjs *.html *.css test/*.js
+
+Checking formatting...
+All matched files use Prettier code style!

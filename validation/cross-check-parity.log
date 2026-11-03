@@ -1,0 +1,29 @@
+PASS health contract
+PASS catalog merges custom models before official providers
+PASS status redacts credentials
+PASS OpenAI multiline SSE and aliases
+PASS Ollama terminal line without newline
+PASS playground test prompt reaches provider messages
+PASS nonstream output still uses GenAI frames
+PASS upstream tool ID survives response
+PASS truncated SSE is not successful STOP
+PASS gzip request accepted with and without encoding header
+PASS tool continuation matches generated call IDs
+PASS inline image reaches compatible provider
+PASS official passthrough preserves status/body/query
+PASS malicious Origin blocked
+PASS model CRUD persists without exposing API key
+PASS model deletion by path and by body, plus legacy __bridge aliases
+PASS provider groups add models without reading saved credentials
+PASS model PATCH handles encoded slash IDs and mutually exclusive defaults
+PASS reasoning rides on thought parts, never on message text
+PASS includeThoughts false suppresses the trace
+PASS nested generationConfig.thinkingConfig suppresses the trace too
+PASS tool call index restart keeps both calls and raw malformed args
+PASS empty completed stream is reported, not a blank reply
+PASS non-SSE provider body is converted, not dropped
+PASS non-SSE HTML error page becomes an SSE error frame
+PASS official gateway HTML page on a generation route becomes an SSE error frame
+PASS tool declarations upgrade placeholders and keep a permissive fallback
+PASS generation knobs reach the provider
+28/28 black-box Rust core checks passed

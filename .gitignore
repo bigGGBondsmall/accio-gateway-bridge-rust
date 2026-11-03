@@ -1,0 +1,6 @@
+/target/
+/config.json
+*.tmp
+*.log
+.DS_Store
+/.accio-bridge.pid

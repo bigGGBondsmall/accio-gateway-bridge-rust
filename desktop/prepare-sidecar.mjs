@@ -1,0 +1,12 @@
+import {execFileSync} from 'node:child_process';
+import {mkdirSync,copyFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+const here=path.dirname(fileURLToPath(import.meta.url));
+const target=process.argv[2] || execFileSync('rustc',['--print','host-tuple'],{encoding:'utf8'}).trim();
+if(!/^[a-zA-Z0-9_-]+$/.test(target))throw new Error('Invalid target triple');
+execFileSync('cargo',['build','--release','--locked','--manifest-path',path.join(here,'../Cargo.toml'),'--target',target],{stdio:'inherit'});
+const ext=target.includes('windows')?'.exe':'';
+mkdirSync(path.join(here,'binaries'),{recursive:true});
+copyFileSync(path.join(here,`../target/${target}/release/accio-gateway-bridge-rust${ext}`),path.join(here,`binaries/accio-gateway-bridge-rust-${target}${ext}`));
+console.log('Prepared sidecar for',target);

@@ -1,0 +1,89 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/main.rs (target/debug/deps/accio_gateway_bridge_rust-8bbf826d13dced0c)
+
+running 25 tests
+test accio::tests::launch_validation_without_process ... ok
+test config::tests::remote_bind_requires_token ... ok
+test config::tests::secrets_hidden ... ok
+test accio::tests::fixture_inspection ... ok
+test discovery::tests::shapes_and_annotation ... ok
+test management::tests::invalid_batch_has_no_partial_write ... ok
+test management::tests::catalog_flags_cannot_be_patched ... ok
+test management::tests::grouping_and_redaction ... ok
+test discovery::tests::reject_credential_url ... ok
+test management::tests::patch_default_exclusive ... ok
+test management::tests::group_patch_clear_and_destination_guard ... ok
+test protocol::tests::nonstream_tools_usage_and_errors ... ok
+test management::tests::append_uses_group_key_not_client_key ... ok
+test protocol::tests::reject_non_image ... ok
+test protocol::tests::inline_images_and_remote_ollama_rejection ... ok
+test protocol::tests::text_only_keeps_string ... ok
+test protocol::tests::aliases_and_knobs ... ok
+test route_tests::legacy_management_routes_are_canonicalized ... ok
+test protocol::tests::tool_continuation_fifo_and_explicit_ids ... ok
+test stream::tests::eof_is_not_success ... ok
+test stream::tests::split_utf8_and_multiline ... ok
+test stream::tests::ndjson_tail ... ok
+test discovery::tests::fixture_probe ... ok
+test protocol::golden::matches_tested_node_converter_fixtures ... ok
+test discovery::tests::redirect_never_forwards_credentials ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+PASS health contract
+PASS catalog merges custom models before official providers
+PASS status redacts credentials
+PASS OpenAI multiline SSE and aliases
+PASS Ollama terminal line without newline
+PASS playground test prompt reaches provider messages
+PASS nonstream output still uses GenAI frames
+PASS upstream tool ID survives response
+PASS truncated SSE is not successful STOP
+PASS gzip request accepted with and without encoding header
+PASS tool continuation matches generated call IDs
+PASS inline image reaches compatible provider
+PASS official passthrough preserves status/body/query
+PASS malicious Origin blocked
+PASS model CRUD persists without exposing API key
+PASS provider groups add models without reading saved credentials
+PASS model PATCH handles encoded slash IDs and mutually exclusive defaults
+PASS legacy POST delete supports body IDs and query fallback
+18/18 black-box Rust core checks passed
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> accio-bridge-ui@0.1.0 test
+> node --test test/*.test.js
+
+✔ UI through real local Rust core: connect/create/edit/disable/delete, token not persisted (291.135976ms)
+✔ initial connected native status and token field hidden (1.634053ms)
+✔ edit never renders saved API key; cancel clears input (6.453248ms)
+✔ changing destination requires explicit credential choice (6.895333ms)
+✔ unchanged edit omits secret; new clear is explicit (6.307827ms)
+✔ unsafe credential URL rejected (3.493075ms)
+✔ search produces real empty state (2.648202ms)
+✔ disable uses real POST and no key leakage (9.653941ms)
+✔ delete cancel makes no request, confirmation deletes (3.342498ms)
+✔ diagnostics never calls model endpoints (2.578557ms)
+✔ error surface never echoes credentials (0.475998ms)
+✔ untrusted model labels inserted as text (3.17096ms)
+✔ settings save uses config endpoint, not model request (8.789689ms)
+✔ local discovery is explicit and selecting result only prefills editor (5.107769ms)
+✔ Accio launch requires separate confirmation, cancel never launches (mock only) (3.498363ms)
+✔ management outage clears stale success indicators and raw error is never rendered (6.889344ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 677.870345
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> accio-bridge-ui@0.1.0 check
+> prettier --check *.js *.mjs *.html *.css test/*.js
+
+Checking formatting...
+All matched files use Prettier code style!

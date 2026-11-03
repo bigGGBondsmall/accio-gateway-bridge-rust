@@ -1,0 +1,90 @@
+
+C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>cargo fmt --check 
+
+C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>cargo test --locked 
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running unittests src\main.rs (C:\Users\lin\.pi-desktop\scratch\a642a38a-486a-4786-ac52-f8a727e02f2f\target-f39fef4\debug\deps\accio_gateway_bridge_rust-68c240a1dfcaeef2.exe)
+
+running 44 tests
+test accio::tests::launch_validation_without_process ... ok
+test config::tests::remote_bind_requires_token ... ok
+test discovery::tests::shapes_and_annotation ... ok
+test config::tests::secrets_hidden ... ok
+test management::tests::path_delete_removes_one_model_and_reports_missing ... ok
+test protocol::adk_0372_tests::document_metadata_does_not_fetch_or_inline_document ... ok
+test management::tests::catalog_flags_cannot_be_patched ... ok
+test management::tests::invalid_batch_has_no_partial_write ... ok
+test protocol::adk_0372_tests::generation_options_and_thinking_precedence ... ok
+test management::tests::patch_default_exclusive ... ok
+test protocol::adk_0372_tests::reasoning_nonstream_is_a_thought_part ... ok
+test protocol::adk_0372_tests::malformed_args_keep_raw_output_but_not_invalid_history ... ok
+test management::tests::grouping_and_redaction ... ok
+test protocol::adk_0372_tests::snake_case_result_envelope_and_ids ... ok
+test management::tests::group_patch_clear_and_destination_guard ... ok
+test protocol::adk_0372_tests::thought_history_is_never_replayed ... ok
+test protocol::adk_0372_tests::tool_report_flags_dropped_and_upgraded_declarations ... ok
+test discovery::tests::reject_credential_url ... ok
+test management::tests::append_uses_group_key_not_client_key ... ok
+test protocol::tests::aliases_and_knobs ... ok
+test protocol::tests::non_image_is_explicit_metadata_only ... ok
+test protocol::adk_0372_tests::nested_schema_aliases_upgrade_only_placeholders ... ok
+test protocol::tests::inline_images_and_remote_ollama_rejection ... ok
+test protocol::tests::nonstream_tools_usage_and_errors ... ok
+test protocol::tests::text_only_keeps_string ... ok
+test protocol::tests::tool_continuation_fifo_and_explicit_ids ... ok
+test route_tests::legacy_management_routes_are_canonicalized ... ok
+test route_tests::html_snippet_omits_scripts_and_limits_unicode_safely ... ok
+test route_tests::panel_paths_are_canonicalised_like_before ... ok
+test stream::tests::ndjson_tail ... ok
+test stream::tests::eof_is_not_success ... ok
+test route_tests::management_panel_is_served_by_the_gateway ... ok
+test stream::tests::ollama_thinking_and_length_are_preserved ... ok
+test stream::tests::done_only_is_not_a_blank_success ... ok
+test stream::tests::split_utf8_and_multiline ... ok
+test stream::tests::reasoning_is_separate_and_can_be_disabled ... ok
+test stream::tests::reused_indexes_keep_distinct_calls_and_argument_fragments ... ok
+test route_tests::decompression_limits_expanded_bodies ... ok
+test protocol::golden::matches_tested_node_converter_fixtures ... ok
+test accio::tests::fixture_inspection ... ok
+test stream::tests::empty_sse_data_lines_are_bounded ... ok
+test discovery::tests::fixture_probe ... ok
+test stream::tests::sse_event_byte_accounting_resets_between_events ... ok
+test discovery::tests::redirect_never_forwards_credentials ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>cargo clippy --all-targets --locked -- -D warnings 
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.44s
+
+C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>cargo build --locked 
+   Compiling accio-gateway-bridge-rust v0.1.0 (C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.01s
+
+C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>node tests/parity.cjs target/release/accio-gateway-bridge-rust.exe 
+PASS health contract
+PASS catalog merges custom models before official providers
+PASS status redacts credentials
+PASS OpenAI multiline SSE and aliases
+PASS Ollama terminal line without newline
+PASS playground test prompt reaches provider messages
+PASS nonstream output still uses GenAI frames
+PASS upstream tool ID survives response
+PASS truncated SSE is not successful STOP
+PASS gzip request accepted with and without encoding header
+PASS tool continuation matches generated call IDs
+PASS inline image reaches compatible provider
+PASS official passthrough preserves status/body/query
+PASS malicious Origin blocked
+PASS model CRUD persists without exposing API key
+PASS provider groups add models without reading saved credentials
+PASS model PATCH handles encoded slash IDs and mutually exclusive defaults
+PASS legacy POST delete supports body IDs and query fallback
+PASS management panel is served by the gateway on every legacy path
+PASS panel key handling preserves a stored key and allows an explicit clear
+PASS path-style model delete removes the model
+PASS opt-in capture writes the request and the tool set is logged
+22/22 black-box Rust core checks passed
+
+C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>node tests/upstream-stream.cjs target/release/accio-gateway-bridge-rust.exe 
+PASS streaming thoughts, reused tool indexes, empty stream, JSON fallback, compressed HTML guards and transparent ordinary proxy

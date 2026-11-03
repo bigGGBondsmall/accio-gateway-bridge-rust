@@ -1,0 +1,18 @@
+[package]
+name = "accio-gateway-bridge-rust"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+serde_json = "1"
+futures-util = "0.3"
+async-stream = "0.3"
+url = "2"
+flate2 = "1"
+brotli = "8"
+
+sha1 = "0.10"

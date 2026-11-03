@@ -1,0 +1,64 @@
+name: Windows desktop (manual verification)
+# No push/pull_request trigger. Run explicitly after uploading the reviewed source.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Select official Rust stable toolchain
+        shell: pwsh
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: Test and build gateway without upstream calls
+        shell: pwsh
+        run: |
+          cargo test --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: UI tests (local fixtures only)
+        working-directory: ui
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Prepare target-matched sidecar and frontend
+        shell: pwsh
+        run: |
+          node desktop/prepare-sidecar.mjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node ui/build.mjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Check native desktop
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          cargo test --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo clippy --locked -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install official pinned Tauri CLI
+        run: cargo install tauri-cli --version 2.12.4 --locked
+      - name: Build unsigned Windows installer
+        working-directory: desktop
+        run: cargo tauri build --ci --bundles nsis -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: accio-bridge-windows-unsigned
+          path: desktop/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14

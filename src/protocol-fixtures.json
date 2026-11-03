@@ -1,0 +1,1073 @@
+[
+  {
+    "name": "plain-system",
+    "body": {
+      "systemInstruction": "sys",
+      "contents": [
+        {
+          "parts": [
+            {
+              "text": "a"
+            },
+            {
+              "text": "b"
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "upstream",
+      "messages": [
+        {
+          "role": "system",
+          "content": "sys"
+        },
+        {
+          "role": "user",
+          "content": "a\nb"
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  {
+    "name": "plain-system",
+    "body": {
+      "systemInstruction": "sys",
+      "contents": [
+        {
+          "parts": [
+            {
+              "text": "a"
+            },
+            {
+              "text": "b"
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "upstream",
+      "messages": [
+        {
+          "role": "system",
+          "content": "sys"
+        },
+        {
+          "role": "user",
+          "content": "a\nb"
+        }
+      ],
+      "stream": true
+    }
+  },
+  {
+    "name": "generation-options",
+    "body": {
+      "generation_config": {
+        "temperature": 3,
+        "max_output_tokens": 12,
+        "top_p": 0.8,
+        "top_k": 7,
+        "stop_sequences": [
+          "end"
+        ]
+      }
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "upstream",
+      "messages": [],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "temperature": 2,
+      "max_tokens": 12,
+      "top_p": 0.8,
+      "stop": [
+        "end"
+      ],
+      "top_k": 7
+    }
+  },
+  {
+    "name": "generation-options",
+    "body": {
+      "generation_config": {
+        "temperature": 3,
+        "max_output_tokens": 12,
+        "top_p": 0.8,
+        "top_k": 7,
+        "stop_sequences": [
+          "end"
+        ]
+      }
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "upstream",
+      "messages": [],
+      "stream": true,
+      "options": {
+        "temperature": 2,
+        "num_predict": 12,
+        "top_p": 0.8,
+        "top_k": 7,
+        "stop": [
+          "end"
+        ]
+      }
+    }
+  },
+  {
+    "name": "tool-schema",
+    "body": {
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "read",
+              "parametersJson": "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"string\"}}}"
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "upstream",
+      "messages": [],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "read",
+            "description": "",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "tool-schema",
+    "body": {
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "read",
+              "parametersJson": "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"string\"}}}"
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "upstream",
+      "messages": [],
+      "stream": true,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "read",
+            "description": "",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "tool-fifo",
+    "body": {
+      "contents": [
+        {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {
+                "name": "read"
+              }
+            },
+            {
+              "functionCall": {
+                "name": "read",
+                "id": "call_0"
+              }
+            }
+          ]
+        },
+        {
+          "parts": [
+            {
+              "functionResponse": {
+                "name": "read",
+                "id": "call_0",
+                "response": "two"
+              }
+            },
+            {
+              "functionResponse": {
+                "name": "read",
+                "response": "one"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "upstream",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {
+                "name": "read",
+                "arguments": "{}"
+              }
+            },
+            {
+              "id": "call_0",
+              "type": "function",
+              "function": {
+                "name": "read",
+                "arguments": "{}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_0",
+          "name": "read",
+          "content": "two"
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_1",
+          "name": "read",
+          "content": "one"
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  {
+    "name": "tool-fifo",
+    "body": {
+      "contents": [
+        {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {
+                "name": "read"
+              }
+            },
+            {
+              "functionCall": {
+                "name": "read",
+                "id": "call_0"
+              }
+            }
+          ]
+        },
+        {
+          "parts": [
+            {
+              "functionResponse": {
+                "name": "read",
+                "id": "call_0",
+                "response": "two"
+              }
+            },
+            {
+              "functionResponse": {
+                "name": "read",
+                "response": "one"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "upstream",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "function": {
+                "name": "read",
+                "arguments": {}
+              }
+            },
+            {
+              "function": {
+                "name": "read",
+                "arguments": {}
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "two",
+          "tool_name": "read"
+        },
+        {
+          "role": "tool",
+          "content": "one",
+          "tool_name": "read"
+        }
+      ],
+      "stream": true
+    }
+  },
+  {
+    "name": "snake-tools",
+    "body": {
+      "contents": [
+        {
+          "role": "model",
+          "parts": [
+            {
+              "function_call": {
+                "name": "read",
+                "args_json": "{\"x\":1}"
+              }
+            }
+          ]
+        },
+        {
+          "parts": [
+            {
+              "function_response": {
+                "name": "read",
+                "response_json": "denied"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "upstream",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_0",
+              "type": "function",
+              "function": {
+                "name": "read",
+                "arguments": "{\"x\":1}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_0",
+          "name": "read",
+          "content": "denied"
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  {
+    "name": "snake-tools",
+    "body": {
+      "contents": [
+        {
+          "role": "model",
+          "parts": [
+            {
+              "function_call": {
+                "name": "read",
+                "args_json": "{\"x\":1}"
+              }
+            }
+          ]
+        },
+        {
+          "parts": [
+            {
+              "function_response": {
+                "name": "read",
+                "response_json": "denied"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "upstream",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "function": {
+                "name": "read",
+                "arguments": {
+                  "x": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "denied",
+          "tool_name": "read"
+        }
+      ],
+      "stream": true
+    }
+  },
+  {
+    "name": "inline-image",
+    "body": {
+      "contents": [
+        {
+          "parts": [
+            {
+              "text": "look"
+            },
+            {
+              "inline_data": {
+                "mime_type": "image/png",
+                "data": "YWJj"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "upstream",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "look"
+            },
+            {
+              "type": "image_url",
+              "image_url": {
+                "url": "data:image/png;base64,YWJj"
+              }
+            }
+          ]
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  {
+    "name": "inline-image",
+    "body": {
+      "contents": [
+        {
+          "parts": [
+            {
+              "text": "look"
+            },
+            {
+              "inline_data": {
+                "mime_type": "image/png",
+                "data": "YWJj"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "upstream",
+      "messages": [
+        {
+          "role": "user",
+          "content": "look",
+          "images": [
+            "YWJj"
+          ]
+        }
+      ],
+      "stream": true
+    }
+  },
+  {
+    "name": "stream-false",
+    "body": {
+      "stream": false,
+      "model": "asked",
+      "contents": []
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "upstream",
+      "messages": [],
+      "stream": false
+    }
+  },
+  {
+    "name": "stream-false",
+    "body": {
+      "stream": false,
+      "model": "asked",
+      "contents": []
+    },
+    "model": {
+      "id": "model",
+      "upstreamModel": "upstream",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "upstream",
+      "messages": [],
+      "stream": false
+    }
+  },
+  {
+    "name": "empty-schema",
+    "body": {
+      "tools": [
+        {
+          "name": "any",
+          "parameters": {}
+        }
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "x",
+      "messages": [],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "any",
+            "description": "",
+            "parameters": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty-schema",
+    "body": {
+      "tools": [
+        {
+          "name": "any",
+          "parameters": {}
+        }
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "x",
+      "messages": [],
+      "stream": true,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "any",
+            "description": "",
+            "parameters": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "missing-schema",
+    "body": {
+      "tools": [
+        {
+          "name": "none"
+        }
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "x",
+      "messages": [],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "none",
+            "description": "",
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "missing-schema",
+    "body": {
+      "tools": [
+        {
+          "name": "none"
+        }
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "x",
+      "messages": [],
+      "stream": true,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "none",
+            "description": "",
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "system-parts-array",
+    "body": {
+      "system_instruction": [
+        {
+          "text": "first"
+        },
+        {
+          "text": "second"
+        }
+      ],
+      "contents": [
+        {
+          "role": "assistant",
+          "text": "prior"
+        },
+        {
+          "role": "user",
+          "text": "next"
+        }
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "x",
+      "messages": [
+        {
+          "role": "system",
+          "content": "first\nsecond"
+        },
+        {
+          "role": "assistant",
+          "content": "prior"
+        },
+        {
+          "role": "user",
+          "content": "next"
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  {
+    "name": "system-parts-array",
+    "body": {
+      "system_instruction": [
+        {
+          "text": "first"
+        },
+        {
+          "text": "second"
+        }
+      ],
+      "contents": [
+        {
+          "role": "assistant",
+          "text": "prior"
+        },
+        {
+          "role": "user",
+          "text": "next"
+        }
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "x",
+      "messages": [
+        {
+          "role": "system",
+          "content": "first\nsecond"
+        },
+        {
+          "role": "assistant",
+          "content": "prior"
+        },
+        {
+          "role": "user",
+          "content": "next"
+        }
+      ],
+      "stream": true
+    }
+  },
+  {
+    "name": "raw-tool-response",
+    "body": {
+      "contents": [
+        {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {
+                "name": "f",
+                "args": {
+                  "value": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "parts": [
+            {
+              "functionResponse": {
+                "name": "f",
+                "response": false
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "x",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_0",
+              "type": "function",
+              "function": {
+                "name": "f",
+                "arguments": "{\"value\":1}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_0",
+          "name": "f",
+          "content": "false"
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    }
+  },
+  {
+    "name": "raw-tool-response",
+    "body": {
+      "contents": [
+        {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {
+                "name": "f",
+                "args": {
+                  "value": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "parts": [
+            {
+              "functionResponse": {
+                "name": "f",
+                "response": false
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "x",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "function": {
+                "name": "f",
+                "arguments": {
+                  "value": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "false",
+          "tool_name": "f"
+        }
+      ],
+      "stream": true
+    }
+  },
+  {
+    "name": "numeric-string-knobs",
+    "body": {
+      "temperature": "0.25",
+      "maxTokens": "123",
+      "top_p": "0.9",
+      "stop": [
+        "done",
+        ""
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "openai"
+    },
+    "ollama": false,
+    "expected": {
+      "model": "x",
+      "messages": [],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "temperature": 0.25,
+      "max_tokens": 123,
+      "top_p": 0.9,
+      "stop": [
+        "done"
+      ]
+    }
+  },
+  {
+    "name": "numeric-string-knobs",
+    "body": {
+      "temperature": "0.25",
+      "maxTokens": "123",
+      "top_p": "0.9",
+      "stop": [
+        "done",
+        ""
+      ]
+    },
+    "model": {
+      "id": "x",
+      "provider": "ollama"
+    },
+    "ollama": true,
+    "expected": {
+      "model": "x",
+      "messages": [],
+      "stream": true,
+      "options": {
+        "temperature": 0.25,
+        "num_predict": 123,
+        "top_p": 0.9,
+        "stop": [
+          "done"
+        ]
+      }
+    }
+  }
+]

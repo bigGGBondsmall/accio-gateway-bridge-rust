@@ -1,0 +1,61 @@
+# Accio Gateway Bridge — Rust reconstruction
+
+Independent Rust gateway implementation of the user's Accio bridge contracts, with a new Tauri desktop shell in `desktop/` and UI in `ui/`. The existing tested Node project remains untouched in the sibling `bridge/` directory. This is **not** a compiled or verified Windows release, and no real Accio account/model request has been made.
+> **The desktop entry point in use is the Go shell, not the Tauri shell in this package.** `desktop/` here holds Tauri 2 sources that were **never enabled nor built** (Tauri requires the MSVC toolchain; this machine only has the gnu target). The shell actually in use is `target\release\accio-desktop.exe` (Go: 7 views, system tray, single instance, `--selftest`), whose sources live in the Node repository's `desktop/`. Either shell is only a shell: the engine is always this package's `accio-gateway-bridge-rust.exe`.
+
+## Run the core
+
+```sh
+cargo build --locked --release
+cp config.example.json config.json
+./target/release/accio-gateway-bridge-rust --config config.json
+# --port 0 selects an ephemeral port and prints one JSON readiness record.
+```
+
+No configuration file is required to start: missing files use safe empty defaults. Edits create the file; its parent directory must already exist. `ACCIO_BRIDGE_CONFIG` also selects a config file. `--help` describes command options. Existing Node configuration fields/models are accepted; unknown fields survive saves, although not all are active in the Rust implementation.
+
+`ACCIO_BRIDGE_TOKEN` is an **ephemeral management-only** token for the desktop parent, protecting management routes and health checks. It is never persisted. It is separate from saved `server.token` + `server.enforceToken`, which controls data-plane authentication. Default inference/catalog requests are loopback-local without a token. Never expose a bind publicly without deliberate authentication configuration.
+
+## Implemented gateway features
+
+| Area | Status |
+|---|---|
+| Accio catalogue `/api/llm/config/v2` | Custom entries + official merge, bounded identity/config/body-keyed single-slot cache and request coalescing |
+| Accio generation aliases | OpenAI-compatible/Azure-header/Ollama routing, case-insensitive aliases |
+| Message conversion | Text, image parts, system instructions, schema aliases and stable tool-call IDs; non-image attachments become explicit metadata notes (not decoded/fetched) |
+| Real streaming | SSE event decoding incl. multiline, CR/CRLF, split UTF-8 and EOF; Ollama NDJSON tail; disconnect cancels upstream |
+| Stream errors | Malformed, upstream-error and premature EOF never become successful STOP; no automatic retries/fallback after sending custom request |
+| Management | Redacted status, model CRUD (`?id=`, path-form `DELETE /api/bridge/models/<id>`, `POST /api/bridge/models/delete` with body/query), provider groups, model default/flags PATCH, allowlisted config editing |
+| Diagnostics | Node-shaped bounded log ring (each line `ts`/`level`/`msg` plus `model`, 1000 entries), per-model requests/errors/latency; one log line per distinct forwarded tool set; opt-in `ACCIO_BRIDGE_CAPTURE_DIR` request capture; canceled streams count as errors |
+| Management panel | Served by the gateway itself on `/`, `/index.html`, `/dashboard`, `/dashboard/` (reused panel, `no-store`); a stored key is only reported as `hasKey`, so an untouched key field is omitted on save — leaving it blank keeps the key, typing replaces it, clearing removes it |
+| Persistence | Serialized clone/validate/write/commit, temporary file + atomic rename; Unix mode 0600; secrets never in responses |
+| Request safety | Host/Origin guards, separate management/inference tokens, input/decompression/frame/tool/JSON limits; redirects disabled |
+| Official passthrough | Method/status/raw body/query preserved, hop-by-hop headers removed; credential relay deliberately restricted |
+
+Discovery and platform Accio inspection/explicit launch are implemented with bounded local probes and metadata-only fixture tests; real native launch is not validated. Native system-tray/startup/Windows installation behavior must be tested on Windows before release.
+
+## Credential boundary
+
+Custom providers receive only their stored provider credential, never incoming browser cookies, official authorization or gateway tokens. Official inbound authorization/cookies are relayed only on the four exact catalogue/generation routes to the configured official upstream. A bearer equal to the gateway token is never relayed. Other paths use only the explicitly configured upstream API key; credential query parameters `token`/`sg_k` are stripped. This intentionally differs from unrestricted Node passthrough; verify real Accio authentication requirements before relying on it. Response cookies are not passed through. Redirects are never followed.
+
+Editing a destination while retaining a hidden key is rejected: explicitly replace or clear the key. Config files still contain provider secrets in plaintext at rest; OS permissions are not an encrypted keychain. Runtime management tokens do not belong in saved configs.
+
+## Tests (no real API calls)
+
+```sh
+cargo fmt --check
+cargo test --locked
+cargo clippy --all-targets --locked -- -D warnings
+cargo build --locked
+node tests/parity.cjs
+```
+
+Protocol fixtures were generated from the independently tested Node baseline using synthetic requests. Black-box tests start only ephemeral loopback mock servers. These tests are not proof of real account compatibility, Windows desktop operation or a performance improvement over Node.
+
+## Reference policy
+
+Design review covered `TF49/AI-Helper`'s MIT-licensed Accio module; no reference runtime was executed. We retained a focused gateway rather than importing its unrelated vendor/account manager, and did not adopt its buffering-before-streaming behavior or tool-ID mismatch. Rust is a deployment/maintainability choice, not evidence of better speed or correctness. The earlier auth reference without a clear root license informed design only; no implementation was copied from it.
+
+## Accio Work 0.37.2 protocol update
+
+See `docs/adk-0372-comparison.md` for the comparison against upstream commit f39fef4, compatibility fixes, intentional differences, and current validation.

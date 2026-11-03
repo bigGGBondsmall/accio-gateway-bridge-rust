@@ -1,0 +1,47 @@
+AI-Helper static reference review — 2026-11-02
+Repository: https://github.com/TF49/AI-Helper
+Pinned SHA: ccb27c357c99805b99af2cf7ac7cf215989bccfb
+License: LICENSE MIT, Copyright (c) 2025 Jason Young. Cargo MIT. Any copied/substantially derived code must retain notice; independently implemented concepts need no copied code. Reference was read only, not built/run/installed.
+
+Verified implementation
+- Cargo.toml: Rust 2021/MSRV1.85; axum0.7, tokio1, reqwest0.12 rustls/json/stream/compression, tower-http0.5 cors, serde, bytes, futures-util. Tauri is desktop host, not needed by independent gateway.
+- bridge.rs723-730: /health GET; /api/llm/config/v2 any; /api/tool/rlab/call POST; /api/adk/embedding/embed POST; /api/adk/llm and wildcard POST; /api/mcp/proxy and wildcard any; remaining routes official proxy.
+- config.rs: one upstream key/base URL/model, image model, cached list/fingerprint, bridge port, fixed official origin, fallback/prevent-leak flags. NOT equivalent to target's multiple provider/model CRUD configuration.
+- protocol.rs: Accio -> Chat intermediate -> Messages/Responses/Chat endpoint conversion. Endpoint heuristic by model name (claude => Messages; gpt/o1/o3/o4 => Responses), not capability negotiation.
+- Image conversion routes to /v1/images/generations, configurable model; image_model empty by default => disabled, no silent DALL-E default. SSRF-hardened image URL download pins validated public DNS result, no proxy/redirect, checks peer and image magic/stream size.
+- MCP is official proxy with JSON-RPC-shaped errors, not independent MCP implementation. Default prevent_official_leak=true + metadata allowlist excludes MCP => blocked403 by default.
+
+Keep ideas
+- Security before reading large request bodies: instance token header/path credentials, loopback bind, Host/Origin/Sec-Fetch-Site checks, rate limiting, strip local credentials before upstream.
+- Exact credential destination origin + disallow redirects. Config endpoint changes must never reuse old masked key silently.
+- Official metadata path allowlist and fixed https://phoenix-gw.alibaba.com origin; prevent prompt leakage.
+- Model cache fingerprint includes normalized base URL/key; stale cache refresh avoids startup stalls.
+- Bounded gzip inflation; image budget ledger tracks pending/settled and does not retry unknown paid outcomes.
+- Runtime listener graceful shutdown, reusable reqwest client.
+
+Do NOT copy behavior blindly
+1. bridge.rs1875-2160 reads upstream response.bytes().await; 128MB bound only checked AFTER whole allocation. handle_llm1160+ emits heartbeats and only final aggregated frame. Not incremental token streaming; use bytes_stream + bounded event parser and backpressure.
+2. protocol.rs140-180 creates missing tool call IDs call_{part_idx+1} each content; missing response IDs always call_1. Multi-turn duplicate IDs and same-name parallel call mismatches. Preserve repaired target explicit ID-first + name FIFO + global collision-free allocation.
+3. bridge.rs2010-2110 Responses SSE looks for /response/output_text/delta, /response/completed rather than standard top-level type/delta and response.output. Multiline SSE data are also parsed line by line, not event by event. Write proper fixtures; do not import.
+4. protocol.rs inlineData accepts any mime as image_url; preserve explicit supported multimodal handling/rejection from target instead of silently misrepresenting files/audio.
+5. paid_request.rs may_fallback_to_other_provider always false for all states. Official fallback flag currently cannot trigger fallback. Do not promise functional automatic fallback based on UI flag.
+6. config.rs load_accio_config silently defaults on malformed JSON; per-request sync disk reads. Rust gateway should fail clearly at startup/reload, keep validated Arc snapshot; safe atomic save.
+7. get_accio_ui_config returns raw API key to Tauri IPC. Do not port that into HTTP management API; retain redaction.
+8. Origin helper accepts file/app/tauri/vscode-webview prefix and any localhost port; Host middleware skips absent/invalid header. Harden parser and policy, do not call it universal CSRF prevention.
+9. Broad tool/text truncation alters semantics; use explicit context-budget policy, do not silently truncate by default.
+
+Recommended target Rust architecture
+- gateway crate independent of Tauri/Go UI; modules config/security/routing/protocol/provider/{openai,ollama,responses,anthropic}/stream/management/official_proxy.
+- Keep current target JSON field names, provider/model CRUD, paths + aliases, healthz/__bridge aliases, dashboard/desktop gateway-token contract, logs/usage/discovery. AI-Helper lacks much of this management surface.
+- Add protocol as explicit optional config enum; default existing OpenAI-compatible and Ollama. New Responses/Anthropic support should be opt-in and fixture-tested, not guessed by model name.
+- Shared reqwest client, redirect none, per-connect/idle/request timeout; streamed bytes with max frame/body; bounded mpsc/select on client cancellation; distinguish error/incomplete/stop/tool stop; no STOP on transport failure.
+- Typed config DTO + serde aliases/defaults, preserve unknown optional fields only deliberately. State snapshots via Arc/RwLock, no sync disk read per token/request.
+- Phase1 Rust gateway side-by-side with existing Node and unchanged Go/WebView2 launcher protocol. Phase2 optional Rust desktop/Tauri after Windows compile/native launch verification; do not label Go-hosted Rust gateway full-Rust desktop.
+- Port all 38 repaired target regression fixtures; exercise Node client suites against Rust where portable; differential golden protocol tests, mocked upstream only, no real model quota. Add malformed SSE, CRLF/multiline/UTF8 splits, missing terminals, tool ID collisions, header/Origin rebinding, masked key endpoint edit, malicious redirects/body limits and config-corruption tests.
+
+Source links use pinned SHA, not mutable main:
+https://github.com/TF49/AI-Helper/blob/ccb27c357c99805b99af2cf7ac7cf215989bccfb/src-tauri/src/accio/bridge.rs
+https://github.com/TF49/AI-Helper/blob/ccb27c357c99805b99af2cf7ac7cf215989bccfb/src-tauri/src/accio/protocol.rs
+https://github.com/TF49/AI-Helper/blob/ccb27c357c99805b99af2cf7ac7cf215989bccfb/src-tauri/src/accio/config.rs
+https://github.com/TF49/AI-Helper/blob/ccb27c357c99805b99af2cf7ac7cf215989bccfb/src-tauri/src/paid_request.rs
+https://github.com/TF49/AI-Helper/blob/ccb27c357c99805b99af2cf7ac7cf215989bccfb/LICENSE
