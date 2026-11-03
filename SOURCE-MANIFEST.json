@@ -83,8 +83,8 @@
                                                       "sha256":  "218afd8fc9e7e2ef9149bdc77970d1a5397aa23f4805c7a02e612104492395fa"
                                                   },
                   "docs/changes-2026-11-03.md":  {
-                                                     "bytes":  1954,
-                                                     "sha256":  "daf845a6eeb01819fcd879fcff631b51f8b618ec4bf8bc04ffcadb1384d31707"
+                                                     "bytes":  3206,
+                                                     "sha256":  "5693b183bdd9d142e77f8cc05d006a434b2c12ec3a7a373709a597d4422eb5af"
                                                  },
                   "docs/local-discovery-and-accio.md":  {
                                                             "bytes":  3303,
