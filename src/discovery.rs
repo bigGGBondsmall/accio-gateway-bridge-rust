@@ -31,6 +31,9 @@ pub fn timestamp() -> String {
         secs % 60
     )
 }
+/// The single source of the loopback network policy: local endpoints are never reached through the
+/// environment proxy. `main.rs` builds `App::local_client` from this and hands that client to every
+/// caller below, so a future client-level policy cannot silently skip the discovery path.
 pub fn client() -> Result<Client, String> {
     Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -181,14 +184,10 @@ pub fn annotate(services: &mut [Value], models: &[Value]) {
         s["alreadyAdded"] = json!(found);
     }
 }
-pub async fn discover(cfg: &Value, _client: &Client) -> Value {
-    let client = match client() {
-        Ok(c) => c,
-        Err(e) => return json!({"ok":false,"error":e,"services":[]}),
-    };
+pub async fn discover(cfg: &Value, client: &Client) -> Value {
     let models = cfg["models"].as_array().cloned().unwrap_or_default();
     let mut out = discover_probes(
-        &client,
+        client,
         default_probes(),
         &[cfg["server"]["port"].as_u64().unwrap_or(8080) as u16],
         &models,
@@ -201,7 +200,7 @@ pub async fn discover(cfg: &Value, _client: &Client) -> Value {
 }
 pub async fn list_models(
     cfg: &Value,
-    _client: &Client,
+    client: &Client,
     body: &Value,
 ) -> Result<Value, (u16, String)> {
     let mut options = body.clone();
@@ -229,9 +228,8 @@ pub async fn list_models(
     let base = options["baseUrl"]
         .as_str()
         .ok_or((400, "baseUrl must be a valid http(s) URL".into()))?;
-    let c = client().map_err(|e| (500, e))?;
     match list_models_for(
-        &c,
+        client,
         options["provider"].as_str().unwrap_or("openai"),
         base,
         options["apiKey"].as_str().unwrap_or(""),

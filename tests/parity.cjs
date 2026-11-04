@@ -20,8 +20,15 @@ async function main() {
     const chunks = []; for await (const c of req) chunks.push(c);
     const raw = Buffer.concat(chunks); let body; try {body = JSON.parse(raw);} catch {body = {};}
     captured.push({ path: req.url, method: req.method, body, raw: raw.toString(), headers: req.headers });
-    if (req.url === '/api/llm/config/v2') { res.setHeader('content-type','application/json'); res.end(JSON.stringify({success:true,code:'200',data:[{provider:'alibaba',modelList:[{modelCode:'official'}]}]})); return; }
+    if (req.url === '/api/llm/config/v2') {
+      // A rejected official catalogue used to report only "Official catalogue unavailable".
+      if (body.catalogue === 'fail') { res.statusCode=401; res.setHeader('content-type','application/json'); res.setHeader('retry-after','5'); res.end(JSON.stringify({error:{message:'invalid key synthetic-secret',type:'invalid_request_error',code:'invalid_api_key'}})); return; }
+      res.setHeader('content-type','application/json'); res.end(JSON.stringify({success:true,code:'200',data:[{provider:'alibaba',modelList:[{modelCode:'official'}]}]})); return;
+    }
     if (req.url === '/v1/chat/completions') {
+      // A provider that rejects the key quotes the key it rejected; the gateway relays the reason
+      // and not the credential, and keeps the status and the retry hint.
+      if (body.model === 'limited') { res.statusCode=429; res.setHeader('content-type','application/json'); res.setHeader('retry-after','7'); res.setHeader('x-request-id','synthetic-request-id'); res.end(JSON.stringify({error:{message:`invalid key ${(req.headers.authorization||'').replace(/^Bearer /,'')}`,type:'invalid_request_error',code:'invalid_api_key'}})); return; }
       if (body.model === 'truncate') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'); return; }
       if (body.model === 'tool') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"provider_call","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n'); return; }
       if (body.model === 'toolcutjson') { res.setHeader('content-type','application/json');res.end(JSON.stringify({choices:[{finish_reason:'length',message:{tool_calls:[{id:'cutj',function:{name:'read',arguments:'{"path":"a.tx'}}]}}],usage:{prompt_tokens:5,completion_tokens:9}})); return; }
@@ -35,6 +42,8 @@ async function main() {
   });
   provider.listen(0,'127.0.0.1'); await once(provider,'listening');
   const upstream=`http://127.0.0.1:${provider.address().port}`;
+  // A port nothing listens on, for the transport fallback: 502 must stay the connection failure.
+  const deadPort=await new Promise(resolve=>{const probe=http.createServer();probe.listen(0,'127.0.0.1',()=>{const port=probe.address().port;probe.close(()=>resolve(port));});});
   const config={server:{host:'127.0.0.1',port:0},upstream:{baseUrl:upstream},catalog:{fetchOfficial:true},models:[
     {id:'openai',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'normal',apiKey:'synthetic-secret',enabled:true,aliases:['alias']},
     {id:'ollama',provider:'ollama',baseUrl:upstream,upstreamModel:'local',enabled:true},
@@ -44,6 +53,8 @@ async function main() {
     {id:'toolcutjson',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'toolcutjson',enabled:true},
     {id:'tool',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'tool',enabled:true},
     {id:'truncate',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'truncate',enabled:true},
+    {id:'limited',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'limited',apiKey:'synthetic-secret',enabled:true},
+    {id:'unreachable',provider:'openai',baseUrl:`http://127.0.0.1:${deadPort}/v1`,upstreamModel:'normal',enabled:true},
   ]};
   fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify(config));
   const captureDir=path.join(dir,'captured');
@@ -59,6 +70,18 @@ async function main() {
   const generate=async(model,extra={})=>{const response=await req('/api/adk/llm/generateContent','POST',{model,contents:[{parts:[{text:'test'}]}],...extra});assert.equal(response.status,200);return frames(await response.text());};
   await check('health contract',async()=>{const r=await req('/healthz');assert.equal(r.status,200);assert.equal((await r.json()).ok,true);});
   await check('catalog merges custom models before official providers',async()=>{const r=await req('/api/llm/config/v2','POST',{});assert.equal(r.status,200);const v=await r.json();assert.equal(v.data[0].provider,'custom');assert.equal(v.data[0].modelList[0].modelCode,'openai');assert.equal(v.data[1].provider,'alibaba');});
+  await check('a failing official catalogue reports what the upstream answered',async()=>{
+    // A distinct body keeps this off the catalogue cache slot the previous check filled.
+    const r=await req('/api/llm/config/v2','POST',{catalogue:'fail'});
+    assert.equal(r.status,200);
+    const v=await r.json();
+    assert.strictEqual(v.success,true);
+    assert.match(v.warning,/Official catalogue unavailable: official catalogue upstream returned HTTP 401/);
+    assert.match(v.warning,/code=invalid_api_key/);
+    assert.match(v.warning,/retry-after=5/);
+    assert.ok(!v.warning.includes('synthetic-secret'),'the echoed key must be scrubbed');
+    assert.equal(v.data[0].provider,'custom','the local models are still served');
+  });
   await check('status redacts credentials',async()=>{const s=await(await req('/api/bridge/status')).text();assert.ok(!s.includes('synthetic-secret'));assert.equal(JSON.parse(s).models[0].hasKey,true);});
   await check('OpenAI multiline SSE and aliases',async()=>{const f=await generate('ALIAS');assert.equal(f[0].content.parts[0].text,'hello');assert.equal(f.at(-1).turnComplete,true);});
   await check('Ollama terminal line without newline',async()=>{const f=await generate('ollama');assert.ok(JSON.stringify(f).includes('local'));assert.equal(f.at(-1).turnComplete,true);});
@@ -225,6 +248,27 @@ async function main() {
     const post=await req('/','POST',{});
     assert.ok(!/text\/html/.test(post.headers.get('content-type')||''),'POST / must not return panel HTML');
     await post.text();
+  });
+  await check('an upstream error keeps its status and message but never its credential',async()=>{
+    const r=await req('/api/adk/llm/generateContent','POST',{model:'limited',contents:[{parts:[{text:'x'}]}]});
+    // The upstream status is carried through: "upstream returned HTTP 429" alone hid both the
+    // reason and whether a retry could help.
+    assert.equal(r.status,429,'the upstream status replaces the flat 502');
+    const body=await r.json();
+    assert.match(body.error,/HTTP 429/);
+    assert.match(body.error,/invalid key/);
+    assert.match(body.error,/type=invalid_request_error/);
+    assert.match(body.error,/code=invalid_api_key/);
+    assert.match(body.error,/retry-after=7/);
+    assert.ok(!JSON.stringify(body).includes('synthetic-secret'),'the echoed key must be scrubbed');
+    const logs=(await(await req('/api/bridge/logs?lines=200')).json()).lines.map(line=>line.msg).join(' | ');
+    assert.ok(logs.includes('status=429'),logs.slice(0,200));
+    assert.ok(logs.includes('requestId=synthetic-request-id'),'the upstream request id must be logged');
+    assert.ok(!logs.includes('synthetic-secret'),'the log must not carry the credential either');
+    // 502 stays the transport fallback: no upstream answer was reached at all.
+    const down=await req('/api/adk/llm/generateContent','POST',{model:'unreachable',contents:[{parts:[{text:'x'}]}]});
+    assert.equal(down.status,502);
+    assert.match((await down.json()).error,/connection failed/);
   });
   console.log(`${total-failures}/${total} black-box Rust core checks passed`);
   if (failures) process.exitCode = 1;

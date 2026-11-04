@@ -1,6 +1,8 @@
 use crate::protocol;
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::io::Write;
 
 /// Byte framing avoids corrupting UTF-8 split across network reads.
 pub struct Decoder {
@@ -85,6 +87,179 @@ impl Decoder {
         Ok(events)
     }
 }
+/// Magic that starts a gzip member; the buffered path sniffs it too when the header is missing.
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+/// One compressed chunk cannot be allowed to expand without bound: a decompression bomb would reach
+/// memory before the frame splitter ever saw a line break (and it rejects frames at 1 MiB anyway).
+const MAX_DECODED_CHUNK: usize = 8 * 1024 * 1024;
+const INFLATE_FAILED: &str = "invalid compressed upstream stream";
+/// The framing of a stream cannot be replayed, so its first bytes have to decide it.
+#[derive(Clone, Copy)]
+enum Framing {
+    /// No `content-encoding`: identity, unless the first bytes turn out to be a gzip member.
+    Unknown,
+    /// `content-encoding: deflate`: two bytes tell a zlib wrapper from raw DEFLATE.
+    Deflate,
+    /// The codec below is final.
+    Decided,
+}
+enum Codec {
+    Identity,
+    Gzip(Box<flate2::write::GzDecoder<Vec<u8>>>),
+    Zlib(Box<flate2::write::ZlibDecoder<Vec<u8>>>),
+    Deflate(Box<flate2::write::DeflateDecoder<Vec<u8>>>),
+    Brotli(Box<brotli::DecompressorWriter<Vec<u8>>>),
+}
+impl Codec {
+    /// Decoded output is handed to the inner buffer by the codec's own `dump` step, which only runs
+    /// on the next write or on `flush`: without the flush half of a decompressed chunk would stay
+    /// inside the decoder and the frames built from it would never be seen.
+    fn inflate(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        match self {
+            Codec::Identity => Ok(bytes.to_vec()),
+            Codec::Gzip(decoder) => {
+                decoder.write_all(bytes).map_err(|_| INFLATE_FAILED)?;
+                decoder.flush().map_err(|_| INFLATE_FAILED)?;
+                Ok(std::mem::take(decoder.get_mut()))
+            }
+            Codec::Zlib(decoder) => {
+                decoder.write_all(bytes).map_err(|_| INFLATE_FAILED)?;
+                decoder.flush().map_err(|_| INFLATE_FAILED)?;
+                Ok(std::mem::take(decoder.get_mut()))
+            }
+            Codec::Deflate(decoder) => {
+                decoder.write_all(bytes).map_err(|_| INFLATE_FAILED)?;
+                decoder.flush().map_err(|_| INFLATE_FAILED)?;
+                Ok(std::mem::take(decoder.get_mut()))
+            }
+            Codec::Brotli(decoder) => {
+                decoder.write_all(bytes).map_err(|_| INFLATE_FAILED)?;
+                Ok(std::mem::take(decoder.get_mut()))
+            }
+        }
+    }
+    /// Release whatever the codec is still holding: brotli keeps a tail until it is closed, the
+    /// flate2 writers only have the buffer `dump` has not written yet.
+    fn finish(&mut self) -> Vec<u8> {
+        match self {
+            Codec::Identity => Vec::new(),
+            Codec::Brotli(decoder) => {
+                // A truncated stream is reported by the frame decoder's own end-of-stream check,
+                // which is the error the caller already understands.
+                let _ = decoder.close();
+                std::mem::take(decoder.get_mut())
+            }
+            Codec::Gzip(decoder) => {
+                let _ = decoder.flush();
+                std::mem::take(decoder.get_mut())
+            }
+            Codec::Zlib(decoder) => {
+                let _ = decoder.flush();
+                std::mem::take(decoder.get_mut())
+            }
+            Codec::Deflate(decoder) => {
+                let _ = decoder.flush();
+                std::mem::take(decoder.get_mut())
+            }
+        }
+    }
+}
+/// Decode an upstream body stream according to its `content-encoding`.
+///
+/// A custom provider that compresses unconditionally used to hand its compressed bytes straight to
+/// [`Decoder`], which turned a perfectly good answer into "invalid upstream UTF-8": the streaming
+/// path is consumed chunk by chunk, so the buffered helper in `main.rs` cannot be reused here.
+pub struct BodyDecoder {
+    framing: Framing,
+    codec: Codec,
+    /// The first bytes of an undecided stream, held until the framing decision is possible.
+    pending: Vec<u8>,
+}
+impl BodyDecoder {
+    /// `encoding` is the lowercased `content-encoding` header value. An empty value still sniffs a
+    /// gzip magic, exactly like the buffered path does, because a provider may compress without
+    /// saying so.
+    pub fn new(encoding: &str) -> Result<Self, String> {
+        let (framing, codec) = match encoding {
+            "" | "identity" => (Framing::Unknown, Codec::Identity),
+            "gzip" => (
+                Framing::Decided,
+                Codec::Gzip(Box::new(flate2::write::GzDecoder::new(Vec::new()))),
+            ),
+            "deflate" => (
+                Framing::Deflate,
+                Codec::Zlib(Box::new(flate2::write::ZlibDecoder::new(Vec::new()))),
+            ),
+            "br" => (
+                Framing::Decided,
+                Codec::Brotli(Box::new(brotli::DecompressorWriter::new(Vec::new(), 4096))),
+            ),
+            _ => return Err("unsupported content encoding".into()),
+        };
+        Ok(Self {
+            framing,
+            codec,
+            pending: Vec::new(),
+        })
+    }
+    /// Decode one upstream chunk. The identity path stays copy-free, which is the common case.
+    pub fn write<'a>(&mut self, bytes: &'a [u8]) -> Result<Cow<'a, [u8]>, String> {
+        if bytes.is_empty() {
+            return Ok(Cow::Borrowed(bytes));
+        }
+        match self.framing {
+            Framing::Decided => match self.codec {
+                Codec::Identity => Ok(Cow::Borrowed(bytes)),
+                _ => Ok(Cow::Owned(self.decode(bytes)?)),
+            },
+            Framing::Unknown => {
+                if self.pending.is_empty() && bytes[0] != GZIP_MAGIC[0] {
+                    self.framing = Framing::Decided;
+                    return Ok(Cow::Borrowed(bytes));
+                }
+                self.pending.extend_from_slice(bytes);
+                if self.pending.len() < GZIP_MAGIC.len() {
+                    return Ok(Cow::Owned(Vec::new()));
+                }
+                let held = std::mem::take(&mut self.pending);
+                if held.starts_with(&GZIP_MAGIC) {
+                    self.codec = Codec::Gzip(Box::new(flate2::write::GzDecoder::new(Vec::new())));
+                }
+                self.framing = Framing::Decided;
+                Ok(Cow::Owned(self.decode(&held)?))
+            }
+            Framing::Deflate => {
+                self.pending.extend_from_slice(bytes);
+                if self.pending.len() < 2 {
+                    return Ok(Cow::Owned(Vec::new()));
+                }
+                let head = u16::from_be_bytes([self.pending[0], self.pending[1]]);
+                // A zlib header is `(method=8, window bits)` plus a check value: the first two
+                // bytes are a multiple of 31. Anything else is raw DEFLATE.
+                let zlib_wrapped = self.pending[0] & 0x0f == 8 && head.is_multiple_of(31);
+                let held = std::mem::take(&mut self.pending);
+                if !zlib_wrapped {
+                    self.codec =
+                        Codec::Deflate(Box::new(flate2::write::DeflateDecoder::new(Vec::new())));
+                }
+                self.framing = Framing::Decided;
+                Ok(Cow::Owned(self.decode(&held)?))
+            }
+        }
+    }
+    fn decode(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let decoded = self.codec.inflate(bytes)?;
+        if decoded.len() > MAX_DECODED_CHUNK {
+            return Err("decoded stream chunk too large".into());
+        }
+        Ok(decoded)
+    }
+    /// Bytes the codec still holds; call once at end of stream, before the frame decoder's own
+    /// end-of-stream handling.
+    pub fn finish(&mut self) -> Vec<u8> {
+        self.codec.finish()
+    }
+}
 pub struct Sink {
     calls: BTreeMap<u64, Value>,
     index_keys: BTreeMap<Option<u64>, u64>,
@@ -110,14 +285,17 @@ impl Sink {
             finished: false,
         }
     }
-    pub fn event(&mut self, s: &str, ollama: bool) -> Result<Vec<Value>, String> {
+    pub fn event(&mut self, s: &str, ollama: bool) -> Result<Vec<Value>, UpstreamError> {
         if s.trim() == "[DONE]" {
             self.terminal = true;
             return Ok(vec![]);
         }
-        let v: Value = serde_json::from_str(s).map_err(|_| "malformed upstream JSON event")?;
-        if v.get("error").is_some() {
-            return Err("upstream reported an error".into());
+        let v: Value = serde_json::from_str(s)
+            .map_err(|_| UpstreamError::stream("malformed upstream JSON event"))?;
+        // The provider's own error payload is kept: "upstream reported an error" alone told the
+        // caller neither what happened nor whether retrying could help.
+        if let Some(error) = v.get("error").filter(|error| !error.is_null()) {
+            return Err(UpstreamError::provider(error));
         }
         let mut out = vec![];
         if ollama {
@@ -286,7 +464,59 @@ impl Sink {
     }
 }
 pub fn error_frame(message: &str) -> Value {
-    json!({"error":{"code":502,"message":message,"status":"UPSTREAM_ERROR"},"turnComplete":true})
+    error_frame_with(502, message)
+}
+/// A failure frame that carries the code the failure is reported under: the HTTP status when the
+/// upstream answered one, the provider's own numeric `code` when it supplied a usable one.
+///
+/// Transport and stream failures keep the 502 that [`error_frame`] has always used.
+pub fn error_frame_with(code: u16, message: &str) -> Value {
+    json!({"error":{"code":code,"message":message,"status":"UPSTREAM_ERROR"},"turnComplete":true})
+}
+/// An upstream failure and the frame code it should be reported under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpstreamError {
+    pub code: u16,
+    pub message: String,
+}
+impl UpstreamError {
+    /// A transport or stream failure: no provider answer was reached, so 502 stays.
+    pub fn stream(message: impl Into<String>) -> Self {
+        Self {
+            code: 502,
+            message: message.into(),
+        }
+    }
+    /// A provider-reported failure, described from the provider's own error payload.
+    ///
+    /// Google reports its HTTP status in `error.code`, OpenAI reports a symbolic string there; the
+    /// numeric form is a usable frame code and the symbolic one belongs in the message.
+    pub fn provider(error: &Value) -> Self {
+        let described = crate::ProviderError::from_value(error)
+            .map(|error| error.describe())
+            .unwrap_or_default();
+        let message = if described.is_empty() {
+            "upstream reported an error".to_string()
+        } else {
+            format!("upstream reported an error: {described}")
+        };
+        let code = error["code"]
+            .as_u64()
+            .filter(|code| (400..=599).contains(code))
+            .map(|code| code as u16)
+            .unwrap_or(502);
+        Self { code, message }
+    }
+}
+impl From<String> for UpstreamError {
+    fn from(message: String) -> Self {
+        Self::stream(message)
+    }
+}
+impl From<&str> for UpstreamError {
+    fn from(message: &str) -> Self {
+        Self::stream(message)
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -455,5 +685,122 @@ mod tests {
         sink.event("[DONE]", false).unwrap();
         let error = sink.finish().unwrap_err();
         assert!(error.contains("empty response"), "{error}");
+    }
+    /// Feed encoded chunks through the decoding layer exactly the way `generate()` does, and
+    /// collect the frames the sink produced.
+    fn frames_through(encoding: &str, chunks: &[Vec<u8>]) -> Vec<Value> {
+        let mut body = BodyDecoder::new(encoding).unwrap();
+        let mut decoder = Decoder::new(false);
+        let mut sink = Sink::new(true);
+        let mut frames = Vec::new();
+        for chunk in chunks {
+            let decoded = body.write(chunk).unwrap();
+            for event in decoder.feed(&decoded).unwrap() {
+                frames.extend(sink.event(&event, false).unwrap());
+            }
+        }
+        let tail = body.finish();
+        for event in decoder.feed(&tail).unwrap() {
+            frames.extend(sink.event(&event, false).unwrap());
+        }
+        for event in decoder.eof().unwrap() {
+            frames.extend(sink.event(&event, false).unwrap());
+        }
+        frames.push(sink.finish().unwrap());
+        frames
+    }
+    #[test]
+    fn gzip_compressed_sse_streams_through_the_decoder() {
+        let payload = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\ndata: [DONE]\n\n";
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(payload.as_bytes()).unwrap();
+        let gzipped = encoder.finish().unwrap();
+        // Seven-byte chunks cut inside the multi-byte character and inside the JSON, so the
+        // decoder has to reassemble both.
+        let chunks: Vec<Vec<u8>> = gzipped.chunks(7).map(<[u8]>::to_vec).collect();
+        for encoding in ["gzip", ""] {
+            // An empty header has to work as well: a provider may compress without saying so.
+            let frames = frames_through(encoding, &chunks);
+            assert_eq!(frames[0]["content"]["parts"][0]["text"], "你好");
+            assert_eq!(frames[1]["content"]["parts"][0]["text"], "world");
+            assert_eq!(frames[2]["turnComplete"], true);
+            assert!(frames.iter().all(|frame| frame.get("error").is_none()));
+        }
+    }
+    #[test]
+    fn deflate_and_brotli_sse_are_decoded() {
+        let payload =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"zlib\"}}]}\n\ndata: [DONE]\n\n";
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(payload.as_bytes()).unwrap();
+        let zlib = encoder.finish().unwrap();
+        let frames = frames_through("deflate", &[zlib[..3].to_vec(), zlib[3..].to_vec()]);
+        assert_eq!(frames[0]["content"]["parts"][0]["text"], "zlib");
+        assert_eq!(frames[1]["turnComplete"], true);
+
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(payload.as_bytes()).unwrap();
+        let raw = encoder.finish().unwrap();
+        let frames = frames_through("deflate", std::slice::from_ref(&raw));
+        assert_eq!(frames[0]["content"]["parts"][0]["text"], "zlib");
+
+        let brotli_payload = payload.replace("zlib", "brotli");
+        let mut encoder = brotli::CompressorWriter::new(Vec::new(), 4096, 5, 22);
+        encoder.write_all(brotli_payload.as_bytes()).unwrap();
+        let compressed = encoder.into_inner();
+        let chunks: Vec<Vec<u8>> = compressed.chunks(5).map(<[u8]>::to_vec).collect();
+        let frames = frames_through("br", &chunks);
+        assert_eq!(frames[0]["content"]["parts"][0]["text"], "brotli");
+        assert_eq!(frames[1]["turnComplete"], true);
+    }
+    #[test]
+    fn a_provider_error_event_keeps_its_own_message_and_code() {
+        let event = r#"{"error":{"message":"Rate limit reached","type":"rate_limit_error","code":"rate_limit_exceeded"}}"#;
+        let error = Sink::new(true).event(event, false).unwrap_err();
+        // A symbolic code is not a status, so the frame stays on the transport code.
+        assert_eq!(error.code, 502);
+        assert!(error.message.contains("Rate limit reached"), "{error:?}");
+        assert!(error.message.contains("type=rate_limit_error"), "{error:?}");
+        assert!(
+            error.message.contains("code=rate_limit_exceeded"),
+            "{error:?}"
+        );
+        // Google reports the HTTP status in `error.code`, which is what the frame must carry.
+        let event =
+            r#"{"error":{"code":429,"message":"quota exceeded","status":"RESOURCE_EXHAUSTED"}}"#;
+        let error = Sink::new(true).event(event, false).unwrap_err();
+        assert_eq!(error.code, 429);
+        assert!(error.message.contains("quota exceeded"), "{error:?}");
+        assert!(
+            error.message.contains("status=RESOURCE_EXHAUSTED"),
+            "{error:?}"
+        );
+        // A provider that only says "error" still fails the turn.
+        let error = Sink::new(true)
+            .event(r#"{"error":"model not found"}"#, false)
+            .unwrap_err();
+        assert_eq!(error.message, "upstream reported an error: model not found");
+        // A null error is not an error.
+        assert!(Sink::new(true)
+            .event(r#"{"error":null,"choices":[]}"#, false)
+            .is_ok());
+    }
+    #[test]
+    fn error_frames_default_to_the_transport_code() {
+        assert_eq!(error_frame("boom")["error"]["code"], json!(502));
+        assert_eq!(
+            error_frame_with(429, "slow down")["error"]["code"],
+            json!(429)
+        );
+        assert_eq!(
+            error_frame_with(429, "slow down")["turnComplete"],
+            json!(true)
+        );
+        assert_eq!(
+            error_frame("boom")["error"]["status"],
+            json!("UPSTREAM_ERROR")
+        );
     }
 }

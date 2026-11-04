@@ -27,6 +27,9 @@ async function main() {
     if (body.model === 'json') {
       res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({choices:[{message:{content:'JSON fallback',reasoning_content:'thinking'},finish_reason:'stop'}]})); return;
     }
+    // A provider that compresses unconditionally: the gateway sends no accept-encoding of its own,
+    // so this is what used to reach the frame splitter as "invalid upstream UTF-8".
+    if (body.model === 'gzipsse') { res.setHeader('content-type','text/event-stream'); res.setHeader('content-encoding','gzip'); res.end(zlib.gzipSync('data: {"choices":[{"delta":{"content":"gzipped answer"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')); return; }
     res.setHeader('content-type', 'text/event-stream');
     const events = body.model === 'empty' ? [] : [
       {choices:[{delta:{reasoning_content:'thinking'}}]},
@@ -37,7 +40,7 @@ async function main() {
   });
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
   const upstream = `http://127.0.0.1:${provider.address().port}`;
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({server:{host:'127.0.0.1',port:0,token:'gateway-secret'},upstream:{baseUrl:upstream},models:['json','jsonempty','thoughtjson','html','tools','empty'].map(id=>({id,provider:'openai',baseUrl:upstream+'/v1',upstreamModel:id}))}));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({server:{host:'127.0.0.1',port:0,token:'gateway-secret'},upstream:{baseUrl:upstream},models:['json','jsonempty','thoughtjson','html','tools','empty','gzipsse'].map(id=>({id,provider:'openai',baseUrl:upstream+'/v1',upstreamModel:id}))}));
   child = spawn(binary, ['--config',path.join(dir,'config.json'),'--port','0'], {stdio:['ignore','pipe','pipe']});
   const port = await new Promise((resolve,reject) => {
     let buffer = ''; const timer = setTimeout(()=>reject(new Error('startup timeout')),15000);
@@ -58,6 +61,11 @@ async function main() {
     const errors=await generate('html',{stream}); assert.match(errors[0].error.message,/Gateway unavailable/); assert.ok(!JSON.stringify(errors).includes('DO_NOT_RENDER'));
   }
   for (const stream of [true,false]) { assert.match((await generate('jsonempty',{stream}))[0].error.message,/completion message/); }
+  // A compressed event stream has to be decoded before the frame splitter sees it; the compressed
+  // bytes used to produce "invalid upstream UTF-8" instead of the answer.
+  const gzipped=await generate('gzipsse');
+  assert.ok(JSON.stringify(gzipped).includes('gzipped answer'),JSON.stringify(gzipped));
+  assert.equal(gzipped.at(-1).finishReason,'STOP');
   for (const stream of [true,false]) {
     const hidden=await generate('thoughtjson',{stream,includeThoughts:false}); assert.ok(hidden[0].error); assert.ok(!hidden.some(frame=>frame.finishReason==='STOP')); 
     assert.equal((await generate('thoughtjson',{stream}))[0].content.parts[0].thought,true);
