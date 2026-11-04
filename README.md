@@ -49,14 +49,15 @@ cp config.example.json config.json
 |---|---|
 | Accio 模型目录 | 自定义模型 + 官方目录合并；有界、按上游/认证/请求体区分的单槽缓存及并发合并 |
 | Accio 生成接口 | 三个旧路由别名；模型名分层匹配（正式 `id` > `modelCode` > 别名 > `upstreamModel`，不分大小写），歧义名命中时记录告警并点名双方；已注册但禁用的模型返回 404（提示在面板启用），未知名字仍透传官方上游；OpenAI Chat Completions、Ollama |
+| 网络与代理 | 一条显式策略：官方源与远程提供商走环境代理（`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`），回环地址的模型与本机发现强制不走代理；此前回环模型是否走代理取决于调用方，发现流程还会忽略传给它的客户端 |
 | Azure | OpenAI 兼容形状 + `api-key` 请求头；不是完整 Azure deployment/API-version 适配器 |
 | 协议转换 | 文本、系统提示、图片输入、工具声明/调用/结果；工具 ID 续轮匹配；工具调用帧与纯文本轮一样携带上游 `usageMetadata`；完整但非法的参数文本仍原样交给客户端自行报解析错误（旧黑盒用例如此断言）；非图片附件转为明确的元数据说明，不解码或抓取内容 |
-| 流式输出 | 真实分块转发；SSE 多行/CRLF/CR/UTF-8、Ollama NDJSON 尾帧；客户端断开取消上游；上游因长度/令牌上限或内容过滤中止时返回带该原因的 error（用量保留），不再把半截调用标成 `finishReason: "TOOL_CALLS"` |
-| 错误处理 | 异常/截断流不伪装成功；模型请求不自动重试或转发另一模型，避免重复计费 |
+| 流式输出 | 真实分块转发；SSE 多行/CRLF/CR/UTF-8、Ollama NDJSON 尾帧；客户端断开取消上游；上游因长度/令牌上限或内容过滤中止时返回带该原因的 error（用量保留），不再把半截调用标成 `finishReason: "TOOL_CALLS"`；上游压缩过的 SSE（gzip/deflate/brotli，缺失 header 时按 gzip 魔数识别）先解码再解析；上游只给了思维链而本次请求关闭了思维链时，报"无可见内容"而不是返回空成功 |
+| 错误处理 | 异常/截断流不伪装成功；模型请求不自动重试或转发另一模型，避免重复计费；上游非 2xx 时把它的状态码透传给客户端，并在 message 里带上上游给的原因、`type`/`code` 与 `retry-after`（片段经脱敏，密钥不进正文与日志），只有连不上才仍是 502；官方目录失败也在 `Official catalogue unavailable` 后附带同样的状态与原因 |
 | 模型/提供商管理 | 增删改（`?id=`、路径式 `DELETE /api/bridge/models/<id>`、`POST /api/bridge/models/delete` 支持 body/query）、分组、默认模型、开关；密钥不回显，省略保留、空串清除 |
 | 管理面板 | 网关自身在 `/`、`/index.html`、`/dashboard`、`/dashboard/` 返回内嵌的管理面板（复用旧版面板，`no-store`）；模型操作改走 `data-model-action` / `data-model-toggle` 属性 + 委托监听，不再把模型 id 拼进内联 `onclick`/`onchange`（含引号的 id 不再弄坏按钮，也无法借 id 注入脚本）；管理调用统一经包装函数附带内存中的 `x-gateway-token`（令牌栏可填 `server.token` 或 `server.adminToken`，服务端两种配置下都接受），401 提示输入令牌、403 提示该令牌缺少管理范围、需要管理令牌；面板页自身免令牌（**仅限 GET**，非 GET 请求照常按普通路由代理与认证；`server.enforceToken` 为真时亦然，否则索取令牌的页面会被自己挡住），管理路由仍全部需认证；面板对已存密钥只显示 `hasKey`，编辑时**留空即保留**、输入新值即替换、显式清空才删除 |
 | 配置管理 | 白名单字段编辑；保存时拒绝重名（`modelCode` 或别名等于另一个模型的正式 `id` 时报错并点名两个模型；多个提供商共用一个 `upstreamModel` 仍允许）；验证私有副本后原子落盘；运行时管理令牌不持久化 |
-| 日志/用量 | 与 Node 版同形的有界日志（每行 `ts`/`level`/`msg`，另带 `model`；容量 1000 行）、等级/条数过滤；**记录等级可选**（`debug`/`info`/`warn`/`error`，默认 `info`）：启动时用 `ACCIO_BRIDGE_LOG_LEVEL` 或配置 `logging.level`（兼容旧的 `server.logLevel`），运行时用 `GET`/`POST /api/bridge/logging` 切换；低于阈值的行不入环，`debug` 行记录解析后的上游地址、上游状态、工具数、**客户端回填的工具结果名**与透传去向；请求数、错误数、耗时；每套不同的转发工具集记一条诊断日志；`ACCIO_BRIDGE_CAPTURE_DIR` 可选落盘生成请求；不是费用账单/Token 计费系统 |
+| 日志/用量 | 与 Node 版同形的有界日志（每行 `ts`/`level`/`msg`，另带 `model`；容量 1000 行）、等级/条数过滤；**记录等级可选**（`debug`/`info`/`warn`/`error`，默认 `info`）：启动时用 `ACCIO_BRIDGE_LOG_LEVEL` 或配置 `logging.level`（兼容旧的 `server.logLevel`），运行时用 `GET`/`POST /api/bridge/logging` 切换；低于阈值的行不入环，`debug` 行记录解析后的上游地址、上游状态、工具数、**客户端回填的工具结果名**与透传去向；请求数、错误数、耗时；每套不同的转发工具集记一条诊断日志；`ACCIO_BRIDGE_CAPTURE_DIR` 可选落盘生成请求（写盘在阻塞线程池上），`ACCIO_BRIDGE_CAPTURE_MAX` 限定保留条数（默认 200，只清理本网关自己的 `generate-*.json`）；不是费用账单/Token 计费系统 |
 | 本地发现 | 显式触发才探测；有界并发/超时/响应体；支持指定提供商查询模型；`POST /api/bridge/discover/models` 只探测回环地址或 `server.discoveryAllowedHosts` 列出的主机，其他主机返回 403（拒绝信息只含主机名，不回显 URL 与密钥，避免把保存的 apiKey 送给调用方指定的地址） |
 | Accio 检测/启动 | 读取有限安装元数据与版本证据；启动必须显式调用；未知/非中国版要求确认；测试只使用 fixtures，真实启动未验收 |
 | 官方透传 | 保留方法/状态/原始请求体及查询字节，去除逐跳头；入站 `cookie`/`authorization`/`x-accio-token` 随请求转发（对齐 Node 版），但绝不转发本网关自己的 `x-gateway-token` |
