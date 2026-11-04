@@ -1,9 +1,9 @@
 
-C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>cargo fmt --check 
+<repo>>cargo fmt --check 
 
-C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>cargo test --locked 
+<repo>>cargo test --locked 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
-     Running unittests src\main.rs (C:\Users\lin\.pi-desktop\scratch\a642a38a-486a-4786-ac52-f8a727e02f2f\target-f39fef4\debug\deps\accio_gateway_bridge_rust-68c240a1dfcaeef2.exe)
+     Running unittests src\main.rs (<target>\debug\deps\accio_gateway_bridge_rust-68c240a1dfcaeef2.exe)
 
 running 44 tests
 test accio::tests::launch_validation_without_process ... ok
@@ -54,14 +54,14 @@ test discovery::tests::redirect_never_forwards_credentials ... ok
 test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
 
 
-C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>cargo clippy --all-targets --locked -- -D warnings 
+<repo>>cargo clippy --all-targets --locked -- -D warnings 
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.44s
 
-C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>cargo build --locked 
-   Compiling accio-gateway-bridge-rust v0.1.0 (C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4)
+<repo>>cargo build --locked 
+   Compiling accio-gateway-bridge-rust v0.1.0 (<repo>)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.01s
 
-C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>node tests/parity.cjs target/release/accio-gateway-bridge-rust.exe 
+<repo>>node tests/parity.cjs target/release/accio-gateway-bridge-rust.exe 
 PASS health contract
 PASS catalog merges custom models before official providers
 PASS status redacts credentials
@@ -86,5 +86,5 @@ PASS path-style model delete removes the model
 PASS opt-in capture writes the request and the tool set is logged
 22/22 black-box Rust core checks passed
 
-C:\Users\lin\Downloads\Accio-Bridge-Rust-f39fef4>node tests/upstream-stream.cjs target/release/accio-gateway-bridge-rust.exe 
+<repo>>node tests/upstream-stream.cjs target/release/accio-gateway-bridge-rust.exe 
 PASS streaming thoughts, reused tool indexes, empty stream, JSON fallback, compressed HTML guards and transparent ordinary proxy

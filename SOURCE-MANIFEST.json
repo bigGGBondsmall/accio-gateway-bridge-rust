@@ -111,8 +111,8 @@
                                        "sha256":  "982d5e683532fdc244cc7a419b07982476d75ae9ffb19040535134fde20c5cb7"
                                    },
                   "README.md":  {
-                                    "bytes":  9071,
-                                    "sha256":  "4d096de05d1c15fa9f8991c47b33f9bf6be30f7839f975e43a04377f5dbe81f3"
+                                    "bytes":  9030,
+                                    "sha256":  "0cce3790c6c1fe6f67744a02d32490f8765307658330d00bf1bb8c2bd0c5a5bc"
                                 },
                   "scripts/check.sh":  {
                                            "bytes":  214,
@@ -211,8 +211,8 @@
                                                             "sha256":  "ad70e8e4df69b316f2e32304d9be7dcc2b9d22f2ed4b0b4dbdc483d4e6f0e37c"
                                                         },
                   "validation/f39fef4-final-checks.log":  {
-                                                              "bytes":  5326,
-                                                              "sha256":  "5107054fb35f8ada70f9eabe1eef17d600141c1d1283bd737b043aa835f39dbd"
+                                                              "bytes":  4956,
+                                                              "sha256":  "fc9f7ed2e01b82005d29c95f3638d0b0aeacfffceefede15bbb5bc13ee629f5e"
                                                           },
                   "validation/source-checks-20261103.log":  {
                                                                 "bytes":  4418,

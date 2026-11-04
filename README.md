@@ -29,7 +29,7 @@ cp config.example.json config.json
 默认监听 `127.0.0.1:8080`，不自动调用模型。`--port 0` 自动选择空闲端口，标准输出打印 `{event:"listening",host,port}` JSON。`--help` 查看参数；`ACCIO_BRIDGE_CONFIG` 也可以指定配置路径。配置不存在时使用空模型安全默认值，首次编辑时创建文件，父目录须已存在。
 
 桌面构建和运行见 [`desktop/README.md`](desktop/README.md)（若该文件尚不存在，请参阅桌面模块随附文档）。桌面壳负责自己启动的 Rust 子进程，不再依赖旧 Node daemon。不要把原仓库旧 EXE 当作这个版本的产物。
-> **当前在用的桌面入口是 Go 壳，不是本包内的 Tauri 壳。** 本包 `desktop/` 存放的是 Tauri 2 源码，**未启用、从未构建**（官方要求 MSVC 工具链，本机只有 gnu 工具链）；真正在用的是 `target\release\accio-desktop.exe`（Go 壳：7 个视图 + 系统托盘 + 单实例 + `--selftest`），其源码位于 Node 仓库的 `desktop/`（本机 `C:\Users\lin\Downloads\exe-reverse\accio-gateway-bridge\desktop`）。两种壳都只是外壳，引擎始终是本包的 `accio-gateway-bridge-rust.exe`。
+> **当前在用的桌面入口是 Go 壳，不是本包内的 Tauri 壳。** 本包 `desktop/` 存放的是 Tauri 2 源码，**未启用、从未构建**（官方要求 MSVC 工具链，本机只有 gnu 工具链）；真正在用的是 `target\release\accio-desktop.exe`（Go 壳：7 个视图 + 系统托盘 + 单实例 + `--selftest`），其源码位于原 Node 仓库的 `desktop/` 目录（与本包分开维护）。两种壳都只是外壳，引擎始终是本包的 `accio-gateway-bridge-rust.exe`。
 
 ## 原配置迁移
 
