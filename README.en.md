@@ -30,13 +30,13 @@ No configuration file is required to start: missing files use safe empty default
 | Management panel | Served by the gateway itself on `/`, `/index.html`, `/dashboard`, `/dashboard/` (reused panel, `no-store`); a stored key is only reported as `hasKey`, so an untouched key field is omitted on save — leaving it blank keeps the key, typing replaces it, clearing removes it |
 | Persistence | Serialized clone/validate/write/commit, temporary file + atomic rename; Unix mode 0600; secrets never in responses |
 | Request safety | Host/Origin guards, separate management/inference tokens, input/decompression/frame/tool/JSON limits; redirects disabled |
-| Official passthrough | Method/status/raw body/query preserved, hop-by-hop headers removed; credential relay deliberately restricted |
+| Official passthrough | Method/status/raw body/query preserved, hop-by-hop headers removed; inbound `cookie`/`authorization`/`x-accio-token` are relayed on every path (Node parity) except this gateway's own `x-gateway-token` |
 
 Discovery and platform Accio inspection/explicit launch are implemented with bounded local probes and metadata-only fixture tests; real native launch is not validated. Native system-tray/startup/Windows installation behavior must be tested on Windows before release.
 
 ## Credential boundary
 
-Custom providers receive only their stored provider credential, never incoming browser cookies, official authorization or gateway tokens. Official inbound authorization/cookies are relayed only on the four exact catalogue/generation routes to the configured official upstream. A bearer equal to the gateway token is never relayed. Other paths use only the explicitly configured upstream API key; credential query parameters `token`/`sg_k` are stripped. This intentionally differs from unrestricted Node passthrough; verify real Accio authentication requirements before relying on it. Response cookies are not passed through. Redirects are never followed.
+Custom providers receive only their stored provider credential, never incoming browser cookies, official authorization or gateway tokens. Official inbound headers are relayed the way the Node proxy does it: everything except hop-by-hop headers, the recomputed `content-length` and this gateway's own `x-gateway-token` — that includes `cookie`, `authorization` and `x-accio-token`, which is how Accio replays its own session on paths such as `POST /api/mcp/ali1688/sgcookie`. A bearer equal to the saved gateway token or the runtime token is never relayed. Credential query parameters `token`/`sg_k` are stripped. Response cookies are not passed through. Redirects are never followed.
 
 Editing a destination while retaining a hidden key is rejected: explicitly replace or clear the key. Config files still contain provider secrets in plaintext at rest; OS permissions are not an encrypted keychain. Runtime management tokens do not belong in saved configs.
 

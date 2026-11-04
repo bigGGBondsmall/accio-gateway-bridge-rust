@@ -676,6 +676,22 @@ async fn dispatch(
     }
     proxy(app, cfg, method, headers, uri, bytes).await
 }
+/// Inbound headers the official passthrough must not copy: hop-by-hop, the body length we
+/// recompute, and this gateway's own management token.
+const DROPPED_REQUEST_HEADERS: [&str; 12] = [
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-authorization",
+    "proxy-authenticate",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "x-gateway-token",
+];
 fn official_request(
     app: &App,
     cfg: &Value,
@@ -684,15 +700,6 @@ fn official_request(
     url: String,
     bytes: &[u8],
 ) -> reqwest::RequestBuilder {
-    let relay = url::Url::parse(&url).ok().is_some_and(|u| {
-        [
-            "/api/llm/config/v2",
-            "/api/adk/llm",
-            "/api/adk/llm/generateContent",
-            "/api/adk/llm/generateContent/stream",
-        ]
-        .contains(&u.path())
-    });
     let mut request = app
         .client
         .request(method.clone(), url)
@@ -700,26 +707,24 @@ fn official_request(
         .timeout(Duration::from_millis(
             cfg["upstream"]["timeoutMs"].as_u64().unwrap_or(300000),
         ));
-    // Never leak local gateway credentials, cookies or arbitrary browser headers to official origin.
-    for key in [
-        "content-type",
-        "content-encoding",
-        "accept",
-        "x-client-version",
-    ] {
-        if let Some(v) = headers.get(key) {
-            request = request.header(key, v);
+    // Node parity (proxy.js sanitizeRequestHeaders): forward every inbound name except hop-by-hop,
+    // the body length we recompute, and this gateway's own management token. Accio carries its
+    // session as cookie/authorization/x-accio-token on paths outside the four catalogue/generation
+    // routes — for example POST /api/mcp/ali1688/sgcookie, which the 1688 workflows need — so
+    // restricting the relay to those four routes makes the official origin answer 400.
+    for (name, value) in headers.iter() {
+        let key = name.as_str();
+        if DROPPED_REQUEST_HEADERS.contains(&key) || key == "authorization" {
+            continue;
         }
+        request = request.header(key, value);
     }
-    if relay {
-        if let Some(value) = headers.get("x-accio-token") {
-            request = request.header("x-accio-token", value);
-        }
-    }
-    let key = cfg["upstream"]["apiKey"].as_str().unwrap_or("");
-    if !key.is_empty() {
-        request = request.bearer_auth(key);
-    } else if relay {
+    // A configured upstream key owns authorization; otherwise relay Accio's own credential, but
+    // never one that is really this gateway's token.
+    let upstream_key = cfg["upstream"]["apiKey"].as_str().unwrap_or("");
+    if !upstream_key.is_empty() {
+        request = request.bearer_auth(upstream_key);
+    } else {
         let incoming = header(headers, "authorization");
         let gateway = cfg["server"]["token"].as_str().unwrap_or("");
         let credential = bearer_token(incoming);
@@ -730,9 +735,6 @@ fn official_request(
             .is_some_and(|t| constant_equal(credential, t));
         if !incoming.is_empty() && !gateway_match && !runtime_match {
             request = request.header("authorization", incoming);
-        }
-        if let Some(cookie) = headers.get("cookie") {
-            request = request.header("cookie", cookie);
         }
     }
     request

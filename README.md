@@ -57,7 +57,7 @@ cp config.example.json config.json
 | 日志/用量 | 与 Node 版同形的有界日志（每行 `ts`/`level`/`msg`，另带 `model`；容量 1000 行）、等级/条数过滤；**记录等级可选**（`debug`/`info`/`warn`/`error`，默认 `info`）：启动时用 `ACCIO_BRIDGE_LOG_LEVEL` 或配置 `logging.level`（兼容旧的 `server.logLevel`），运行时用 `GET`/`POST /api/bridge/logging` 切换；低于阈值的行不入环，`debug` 行记录解析后的上游地址、上游状态、工具数与透传去向；请求数、错误数、耗时；每套不同的转发工具集记一条诊断日志；`ACCIO_BRIDGE_CAPTURE_DIR` 可选落盘生成请求；不是费用账单/Token 计费系统 |
 | 本地发现 | 显式触发才探测；有界并发/超时/响应体；支持指定提供商查询模型 |
 | Accio 检测/启动 | 读取有限安装元数据与版本证据；启动必须显式调用；未知/非中国版要求确认；测试只使用 fixtures，真实启动未验收 |
-| 官方透传 | 保留方法/状态/原始请求体及查询字节，去除逐跳头；认证只在固定允许路由透传 |
+| 官方透传 | 保留方法/状态/原始请求体及查询字节，去除逐跳头；入站 `cookie`/`authorization`/`x-accio-token` 随请求转发（对齐 Node 版），但绝不转发本网关自己的 `x-gateway-token` |
 | Responses / Anthropic 转换 | **未实现**，不会因为参考仓库支持就宣称支持 |
 | MCP / DALL-E 图片生成 | **未实现专用转换**；未知路由仅受限官方透传，不等于 MCP/生图功能已验证 |
 | 旧 Node CLI/Go WebView2 生命周期 | 不保留完整旧命令集合；由新二进制参数/Tauri 子进程管理替代 |
@@ -68,8 +68,8 @@ cp config.example.json config.json
 
 - 默认仅回环地址；非回环绑定必须配置令牌，所有请求强制认证。外部浏览器 Origin 和不受信 Host 被拒绝。
 - 自定义模型只接收它自身保存的 API key，不接收官方 Cookie、官方 Authorization 或网关令牌；禁用上游重定向。
-- 官方入站 Authorization/Cookie 仅在四个明确的目录/生成路由转发到配置的官方上游；匹配保存/运行时网关令牌的 Bearer 被过滤。其他路由不转发这些入站凭据。
-- 查询参数 `token` / `sg_k` 不透传；响应 Cookie 不透传。这与旧版无条件透传不同，真实 Accio 认证方式仍需验证。
+- 官方入站标头按 Node 版语义转发：除逐跳头、重新计算的 `content-length` 与本网关管理令牌 `x-gateway-token` 外全部透传，包含 `cookie` / `authorization` / `x-accio-token`——Accio 的登录态正是这样在 `POST /api/mcp/ali1688/sgcookie` 这类路径上重放的；等于保存的 `server.token` 或运行时令牌的 Bearer 会被过滤，不会当作凭据发给官方上游。
+- 查询参数 `token` / `sg_k` 不透传；响应 Cookie 不透传；重定向不跟随。真实可用的认证方式仍以 Accio 自身登录态为准。
 - 修改隐藏密钥的目的地址时必须重新输入或明确清除密钥，避免把旧密钥自动发送给新地址。
 - 请求、解压后体积、单帧、累计工具参数、JSON 响应均设上限。取消和错误计入诊断。
 - 配置仍含**明文 API key**；Unix 新文件使用 0600 权限，不等于加密钥匙串。请勿把真实配置放进 Git、压缩包或日志。
