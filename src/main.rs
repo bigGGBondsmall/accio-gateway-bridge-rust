@@ -22,7 +22,13 @@ type CatalogCache = Arc<tokio::sync::Mutex<Option<(String, std::time::Instant, V
 struct App {
     config: Arc<RwLock<Value>>,
     path: Arc<PathBuf>,
+    /// The official origin and every remote provider: honours the environment proxy
+    /// (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`), which is what a user behind a corporate proxy
+    /// needs.
     client: reqwest::Client,
+    /// Loopback endpoints. One network policy, two clients: a request to 127.0.0.1 must never be
+    /// sent through a proxy configured for the internet, and it used to depend on the caller.
+    local_client: reqwest::Client,
     runtime_token: Option<String>,
     telemetry: telemetry::Shared,
     catalog_cache: CatalogCache,
@@ -340,10 +346,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         c["server"]["host"].as_str().unwrap(),
         c["server"]["port"].as_u64().unwrap_or(8080)
     );
+    // One place decides the proxy policy: `client` keeps the environment proxy, `local_client`
+    // never uses it because everything it talks to is on this machine.
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         .build()?;
+    let local_client = discovery::client().map_err(std::io::Error::other)?;
     // Recording level: env wins over config, and POST /api/bridge/logging changes it at runtime.
     let initial_log_level = std::env::var("ACCIO_BRIDGE_LOG_LEVEL")
         .ok()
@@ -354,6 +363,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: Arc::new(RwLock::new(c)),
         path: Arc::new(path),
         client,
+        local_client,
         runtime_token,
         telemetry: Default::default(),
         catalog_cache: Default::default(),
@@ -864,14 +874,14 @@ async fn dispatch(
         return error(405, "method not allowed");
     }
     if method == "GET" && path == "/api/bridge/discover" {
-        return json_response(discovery::discover(cfg, &app.client).await);
+        return json_response(discovery::discover(cfg, &app.local_client).await);
     }
     if method == "POST" && path == "/api/bridge/discover/models" {
         let body = match decode(bytes, header(headers, "content-encoding"), max) {
             Ok(v) => v,
             Err(e) => return error(400, &e),
         };
-        return match discovery::list_models(cfg, &app.client, &body).await {
+        return match discovery::list_models(cfg, &app.local_client, &body).await {
             Ok(v) => json_response(v),
             Err((status, e)) => error(status, &e),
         };
@@ -1094,6 +1104,255 @@ async fn bounded_json(response: reqwest::Response, max: usize) -> Result<Value, 
     let text = bounded_text(response, max).await?;
     serde_json::from_str(&text).map_err(|_| "invalid upstream JSON".into())
 }
+/// Names that introduce a credential in an upstream payload.
+/// Names that introduce a credential in an upstream payload. The specific names come first so the
+/// bare `key` cannot claim a value that `apiKey` introduced.
+const SECRET_NAMES: [&str; 11] = [
+    "apikey",
+    "api_key",
+    "api-key",
+    "access_token",
+    "client_secret",
+    "authorization",
+    "bearer",
+    "password",
+    "secret",
+    "token",
+    "key",
+];
+/// Nothing beyond this is ever looked at in an upstream body.
+const EXCERPT_LIMIT: usize = 4096;
+
+/// The token without the punctuation around it, plus where its first character sits in the token.
+fn token_core(token: &str) -> (usize, &str) {
+    let keep = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '/');
+    let trimmed = token.trim_start_matches(|c| !keep(c));
+    let start = token.len() - trimmed.len();
+    (start, trimmed.trim_end_matches(|c| !keep(c)))
+}
+
+/// Replace anything credential-shaped before an upstream body can reach a client.
+///
+/// A provider that rejects a request often quotes the credential it rejected, so its body must
+/// never be relayed verbatim: this keeps the diagnosis and drops the secret. Only shapes a key
+/// really has are dropped, so the provider's own wording survives.
+fn scrub_secrets(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    // A bare name ("Bearer", "apiKey:") says the next token is the credential itself.
+    let mut after_name = false;
+    for (index, token) in text.split(' ').enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        let lower = token.to_ascii_lowercase();
+        // `"apiKey":"sk-..."`, `apiKey: sk-...` and `token=...` all name the credential in the
+        // same token, because whitespace is collapsed before this runs.
+        let named = SECRET_NAMES.iter().find_map(|name| {
+            [format!("\"{name}\""), name.to_string()]
+                .iter()
+                .find_map(|needle| {
+                    lower.match_indices(needle.as_str()).find_map(|(at, _)| {
+                        // A name inside a longer word ("monkey", "max_tokens") is not a name.
+                        let boundary = at == 0
+                            || !lower[..at]
+                                .ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+                        let rest = &lower[at + needle.len()..];
+                        let separator = rest.starts_with(':') || rest.starts_with('=');
+                        (boundary && separator).then_some(at + needle.len() + 1)
+                    })
+                })
+        });
+        if let Some(value_start) = named {
+            out.push_str(&token[..value_start.min(token.len())]);
+            if value_start >= token.len() {
+                // The value is a separate token: arm the next one.
+                after_name = true;
+            } else {
+                out.push_str("***");
+                after_name = false;
+            }
+            continue;
+        }
+        let (start, core) = token_core(token);
+        let bare = core.to_ascii_lowercase();
+        if SECRET_NAMES.contains(&bare.as_str()) {
+            // The name of the credential is not the credential.
+            out.push_str(token);
+            after_name = true;
+            continue;
+        }
+        let recognised_prefix = bare.starts_with("sk-") || bare.starts_with("sk_");
+        // A long unbroken run of mixed-case letters, digits and base64 punctuation is a token, not
+        // prose; a count (`max_tokens: 4096`), a URL or a plain hex digest stays readable.
+        let opaque = core.len() >= 32
+            && !core.contains(':')
+            && core
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-+/=".contains(c))
+            && core.chars().any(|c| c.is_ascii_uppercase())
+            && core.chars().any(|c| c.is_ascii_lowercase())
+            && core.chars().any(|c| c.is_ascii_digit());
+        let secret = after_name || recognised_prefix || opaque;
+        after_name = false;
+        if !secret {
+            out.push_str(token);
+        } else if recognised_prefix {
+            // Keep the prefix: it says which provider the key belongs to.
+            out.push_str(&token[..(start + 3).min(token.len())]);
+            out.push_str("***");
+        } else {
+            out.push_str("***");
+        }
+    }
+    out
+}
+
+/// A bounded, tag-stripped, credential-free excerpt of an upstream body.
+fn safe_excerpt(body: &str) -> String {
+    let head: String = body.chars().take(EXCERPT_LIMIT).collect();
+    body_snippet(&scrub_secrets(&head))
+}
+
+/// What a provider said went wrong, in its own words.
+///
+/// Providers agree on `{"error":{"message","type","code"}}`; some put those fields at the top
+/// level, some make `error` a string, and Google's `code` is the HTTP status. That is enough to
+/// tell a rate limit from a bad request without relaying the body itself.
+struct ProviderError {
+    message: String,
+    kind: String,
+    code: String,
+    status: String,
+}
+
+/// `code` is a string in OpenAI's payload and a number in Google's.
+fn provider_code(holder: &Value) -> String {
+    holder["code"]
+        .as_u64()
+        .map(|code| code.to_string())
+        .or_else(|| holder["code"].as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+impl ProviderError {
+    fn parse(body: &str) -> Option<Self> {
+        serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|value| Self::from_value(&value))
+    }
+    /// Reused by `stream::UpstreamError` for a provider error event inside an SSE stream.
+    fn from_value(value: &Value) -> Option<Self> {
+        // `{"error":"model not found"}` hands the string over on its own; Ollama and several
+        // gateways answer that way.
+        if let Some(message) = value.as_str() {
+            return Some(Self {
+                message: message.to_string(),
+                kind: String::new(),
+                code: String::new(),
+                status: String::new(),
+            });
+        }
+        let holder = match value.get("error") {
+            Some(error) if error.is_object() => error,
+            _ => value,
+        };
+        let text = |key: &str| holder[key].as_str().unwrap_or("").to_string();
+        let mut error = Self {
+            message: text("message"),
+            kind: text("type"),
+            code: provider_code(holder),
+            status: text("status"),
+        };
+        if error.message.is_empty() {
+            if let Some(text) = value["error"].as_str() {
+                error.message = text.to_string();
+            }
+        }
+        let empty = error.message.is_empty()
+            && error.kind.is_empty()
+            && error.code.is_empty()
+            && error.status.is_empty();
+        (!empty).then_some(error)
+    }
+    /// A single bounded, scrubbed line: `rate limit reached (type=..., code=429)`.
+    fn describe(&self) -> String {
+        let mut text = safe_excerpt(&self.message);
+        let mut fields: Vec<String> = Vec::new();
+        for (label, value) in [
+            ("type", &self.kind),
+            ("code", &self.code),
+            ("status", &self.status),
+        ] {
+            let value = safe_excerpt(value);
+            if !value.is_empty() {
+                fields.push(format!("{label}={value}"));
+            }
+        }
+        if !fields.is_empty() {
+            let suffix = fields.join(", ");
+            text = if text.is_empty() {
+                format!("({suffix})")
+            } else {
+                format!("{text} ({suffix})")
+            };
+        }
+        text
+    }
+}
+
+/// What the client is told about a non-2xx upstream answer.
+///
+/// The provider's own diagnosis, the status and `Retry-After` are what make the answer actionable;
+/// the body is never relayed, only a bounded and scrubbed excerpt of it. `subject` names what
+/// answered, so the same wording serves the model path and the official catalogue.
+fn upstream_error_message(subject: &str, status: u16, retry_after: &str, body: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let detail = ProviderError::parse(body)
+        .map(|error| error.describe())
+        .unwrap_or_else(|| safe_excerpt(body));
+    if !detail.is_empty() {
+        parts.push(detail);
+    }
+    let retry_after = safe_excerpt(retry_after);
+    if !retry_after.is_empty() {
+        parts.push(format!("retry-after={retry_after}"));
+    }
+    if parts.is_empty() {
+        format!("{subject} returned HTTP {status}")
+    } else {
+        format!("{subject} returned HTTP {status}: {}", parts.join(" "))
+    }
+}
+
+/// The status a client sees for a non-2xx upstream answer.
+///
+/// The upstream status is carried through so a caller can tell a rate limit from a bad request (and
+/// read `Retry-After`). A code outside the error range — a 3xx redirect to a login page, say — has
+/// no meaning as a final answer here and keeps the 502 the transport fallback uses.
+fn upstream_status(status: u16) -> u16 {
+    if (400..=599).contains(&status) {
+        status
+    } else {
+        502
+    }
+}
+
+/// The provider's correlation id, which is what a support ticket needs.
+fn upstream_request_id(headers: &HeaderMap) -> String {
+    for key in [
+        "x-request-id",
+        "request-id",
+        "x-amzn-requestid",
+        "x-correlation-id",
+        "cf-ray",
+    ] {
+        let value = header(headers, key);
+        if !value.is_empty() {
+            return value.chars().take(128).collect();
+        }
+    }
+    String::new()
+}
 fn body_snippet(body: &str) -> String {
     let mut source = body.to_string();
     for tag in ["script", "style"] {
@@ -1183,17 +1442,68 @@ async fn catalog(app: &App, cfg: &Value, headers: &HeaderMap, bytes: &[u8]) -> R
                 );
                 providers.extend(official)
             }
-            Err(()) => warning = Some("Official catalogue unavailable"),
+            // Say what the official catalogue answered: a bare "unavailable" hid a 401 from a
+            // lapsed session and a 429 from a rate limit behind the same words.
+            Err(reason) => warning = Some(format!("Official catalogue unavailable: {reason}")),
         }
     }
     json_response(json!({"success":true,"code":"200","data":providers,"warning":warning}))
 }
+/// How many capture files are kept when `ACCIO_BRIDGE_CAPTURE_MAX` says nothing.
+const DEFAULT_CAPTURE_LIMIT: usize = 200;
+
+/// The capture retention limit: newest files win, oldest are dropped.
+fn capture_limit() -> usize {
+    std::env::var("ACCIO_BRIDGE_CAPTURE_MAX")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(DEFAULT_CAPTURE_LIMIT)
+}
+
+/// Delete the oldest captures in `dir` until at most `limit` are left.
+///
+/// Only this gateway's own `generate-*.json` files are candidates, so pointing the capture at a
+/// directory that holds something else never deletes anything else. The recorded time decides the
+/// order and the name (millisecond plus sequence) breaks a tie, which a filesystem with a coarse
+/// timestamp needs.
+fn prune_captures(dir: &std::path::Path, limit: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut captures: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("generate-") || !name.ends_with(".json") {
+            continue;
+        }
+        let recorded = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        captures.push((recorded, entry.path()));
+    }
+    // The file about to be written takes one of the slots.
+    let keep = limit.saturating_sub(1);
+    if captures.len() <= keep {
+        return;
+    }
+    captures.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let drop = captures.len() - keep;
+    for (_, path) in captures.into_iter().take(drop) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Opt-in capture of incoming generation requests.
 ///
 /// Setting `ACCIO_BRIDGE_CAPTURE_DIR` records each generation body there. It stays off
 /// unless the variable is set, because a body holds the whole conversation; point it at a
-/// scratch directory and delete it afterwards.
-fn capture_request(telemetry: &telemetry::Shared, body: &Value) {
+/// scratch directory and delete it afterwards. At most `ACCIO_BRIDGE_CAPTURE_MAX` files (200 by
+/// default) are kept, oldest first, so a capture left switched on cannot fill the disk it points
+/// at.
+async fn capture_request(telemetry: &telemetry::Shared, body: &Value) {
     let Ok(dir) = std::env::var("ACCIO_BRIDGE_CAPTURE_DIR") else {
         return;
     };
@@ -1209,17 +1519,25 @@ fn capture_request(telemetry: &telemetry::Shared, body: &Value) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let path = PathBuf::from(dir).join(format!("generate-{stamp}-{seq}.json"));
-    match path
-        .parent()
-        .map(std::fs::create_dir_all)
-        .unwrap_or(Ok(()))
-        .and_then(|_| std::fs::write(&path, body.to_string()))
-    {
+    let path = PathBuf::from(&dir).join(format!("generate-{stamp}-{seq}.json"));
+    let shown = path.display().to_string();
+    let content = body.to_string();
+    let limit = capture_limit();
+    // The body can be `maxBodyBytes` (25 MiB by default) and this is a plain file system call:
+    // it belongs on the blocking pool, not on the worker thread that other turns share.
+    let written = tokio::task::spawn_blocking(move || {
+        let folder = PathBuf::from(&dir);
+        std::fs::create_dir_all(&folder)?;
+        prune_captures(&folder, limit);
+        std::fs::write(&path, content)
+    })
+    .await
+    .unwrap_or_else(|_| Err(std::io::Error::other("capture task failed")));
+    match written {
         Ok(()) => telemetry::log(
             telemetry,
             "info",
-            &format!("captured generation request -> {}", path.display()),
+            &format!("captured generation request -> {shown}"),
         ),
         // Capture is a debugging aid, so a failure is reported and never fails the turn.
         Err(e) => telemetry::log(
@@ -1296,6 +1614,22 @@ fn log_forwarded_tools(app: &App, report: &protocol::ToolReport, model_id: &str)
         );
     }
 }
+/// The HTTP client a model endpoint deserves.
+///
+/// A model served from this machine (Ollama, llama.cpp, kobold.cpp) is not on the internet, so it
+/// uses the client that ignores the environment proxy; every remote provider keeps honouring it.
+fn model_client<'a>(app: &'a App, model: &Value) -> &'a reqwest::Client {
+    let loopback = model["baseUrl"]
+        .as_str()
+        .and_then(|base| url::Url::parse(base).ok())
+        .and_then(|url| url.host_str().map(config::is_loopback))
+        .unwrap_or(false);
+    if loopback {
+        &app.local_client
+    } else {
+        &app.client
+    }
+}
 async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Response {
     let mut turn = telemetry::Turn::new(
         app.telemetry.clone(),
@@ -1306,7 +1640,7 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
         Ok(pair) => pair,
         Err(e) => return error(400, &e),
     };
-    capture_request(&app.telemetry, body);
+    capture_request(&app.telemetry, body).await;
     log_forwarded_tools(app, &report, model["id"].as_str().unwrap_or("unknown"));
     let streaming = payload["stream"] != false;
     let thoughts_enabled = protocol::thoughts_requested(body);
@@ -1358,8 +1692,9 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
             );
         }
     }
-    let mut request = app
-        .client
+    // A model hosted on this machine gets the client that ignores the environment proxy: a proxy
+    // configured for the internet must not swallow a request to 127.0.0.1.
+    let mut request = model_client(app, model)
         .post(endpoint)
         .json(&payload)
         .timeout(Duration::from_millis(
@@ -1381,17 +1716,40 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
                 "debug",
                 &format!("upstream connection failed: {e}"),
             );
+            // 502 stays the transport fallback: nothing upstream ever answered.
             return error(502, "model upstream connection failed");
         }
     };
     if !response.status().is_success() {
-        return error(
-            502,
+        let status = response.status().as_u16();
+        let retry_after = header(response.headers(), "retry-after").to_string();
+        let request_id = upstream_request_id(response.headers());
+        // "returned HTTP 429" cannot tell a rate limit from a rejected key, so the provider's own
+        // error payload is read (bounded) before the response is consumed. The body itself stays
+        // here: only a scrubbed excerpt of it reaches the caller or the log.
+        // An unreadable or oversized error body is not worth failing over: the status and the
+        // headers above already say what happened.
+        let body: String = bounded_text(response, 64 * 1024).await.unwrap_or_default();
+        let message = upstream_error_message("model upstream", status, &retry_after, &body);
+        telemetry::log(
+            &app.telemetry,
+            "warn",
             &format!(
-                "model upstream returned HTTP {}",
-                response.status().as_u16()
+                "model upstream {} replied status={status} requestId={} retryAfter={}",
+                model["provider"].as_str().unwrap_or("openai"),
+                if request_id.is_empty() {
+                    "-"
+                } else {
+                    request_id.as_str()
+                },
+                if retry_after.is_empty() {
+                    "-"
+                } else {
+                    retry_after.as_str()
+                },
             ),
         );
+        return error(upstream_status(status), &message);
     }
     let content_type = header(response.headers(), "content-type").to_ascii_lowercase();
     telemetry::log(
@@ -1446,13 +1804,27 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
             Err(e) => single_frame(stream::error_frame(&e)),
         };
     }
+    // A provider that compresses its event stream has to be decoded before the frame splitter sees
+    // it; otherwise valid SSE arrives as "invalid upstream UTF-8" and the turn is abandoned.
+    let encoding = header(response.headers(), "content-encoding").to_ascii_lowercase();
+    let mut body = match stream::BodyDecoder::new(&encoding) {
+        Ok(body) => body,
+        Err(e) => return single_frame(stream::error_frame(&e)),
+    };
     let output = async_stream::stream! {
       let mut upstream=response.bytes_stream();let mut decoder=stream::Decoder::new(ollama);let mut sink=stream::Sink::new(thoughts_enabled);let mut failed=false;
-      while let Some(chunk)=upstream.next().await{let events=match chunk{Ok(bytes)=>decoder.feed(&bytes),Err(_)=>Err("upstream stream read failed".into())};let events=match events{Ok(v)=>v,Err(e)=>{yield Ok::<_,std::io::Error>(sse(&stream::error_frame(&e)));failed=true;break;}};
-        for event in events{match sink.event(&event,ollama){Ok(frames)=>{for frame in frames{yield Ok(sse(&frame));}},Err(e)=>{yield Ok(sse(&stream::error_frame(&e)));failed=true;break;}}if sink.terminal{break;}}
+      while let Some(chunk)=upstream.next().await{
+        let encoded=match chunk{Ok(bytes)=>bytes,Err(_)=>{yield Ok::<_,std::io::Error>(sse(&stream::error_frame("upstream stream read failed")));failed=true;break;}};
+        let decoded=match body.write(&encoded){Ok(decoded)=>decoded,Err(e)=>{yield Ok(sse(&stream::error_frame(&e)));failed=true;break;}};
+        let events=match decoder.feed(&decoded){Ok(events)=>events,Err(e)=>{yield Ok(sse(&stream::error_frame(&e)));failed=true;break;}};
+        for event in events{match sink.event(&event,ollama){Ok(frames)=>{for frame in frames{yield Ok(sse(&frame));}},Err(e)=>{yield Ok(sse(&stream::error_frame_with(e.code,&e.message)));failed=true;break;}}if sink.terminal{break;}}
         if failed||sink.terminal{break;}
       }
-      if !failed&&!sink.terminal{match decoder.eof(){Ok(events)=>for event in events{match sink.event(&event,ollama){Ok(frames)=>for frame in frames{yield Ok(sse(&frame));},Err(e)=>{yield Ok(sse(&stream::error_frame(&e)));failed=true;break;}}},Err(e)=>{yield Ok(sse(&stream::error_frame(&e)));failed=true;}}}
+      if !failed&&!sink.terminal{
+        let tail=body.finish();
+        if !tail.is_empty(){match decoder.feed(&tail){Ok(events)=>for event in events{match sink.event(&event,ollama){Ok(frames)=>{for frame in frames{yield Ok(sse(&frame));}},Err(e)=>{yield Ok(sse(&stream::error_frame_with(e.code,&e.message)));failed=true;break;}}},Err(e)=>{yield Ok(sse(&stream::error_frame(&e)));failed=true;}}}
+        if !failed{match decoder.eof(){Ok(events)=>for event in events{match sink.event(&event,ollama){Ok(frames)=>for frame in frames{yield Ok(sse(&frame));},Err(e)=>{yield Ok(sse(&stream::error_frame_with(e.code,&e.message)));failed=true;break;}}},Err(e)=>{yield Ok(sse(&stream::error_frame(&e)));failed=true;}}}
+      }
       if !failed{let frame=match sink.finish(){Ok(v)=>{if v.get("error").is_none(){turn.success();}v},Err(e)=>stream::error_frame(&e)};yield Ok(sse(&frame));}
     };
     sse_response(output)
@@ -1498,7 +1870,7 @@ async fn official_catalog(
     cfg: &Value,
     headers: &HeaderMap,
     bytes: &[u8],
-) -> Result<Vec<Value>, ()> {
+) -> Result<Vec<Value>, String> {
     use sha1::{Digest, Sha1};
     let mut hash = Sha1::new();
     for value in [
@@ -1534,14 +1906,41 @@ async fn official_catalog(
         ))
         .send()
         .await
-        .map_err(|_| ())?;
+        .map_err(|_| "upstream request failed or timed out".to_string())?;
     if !response.status().is_success() {
-        return Err(());
+        let status = response.status().as_u16();
+        let retry_after = header(response.headers(), "retry-after").to_string();
+        let request_id = upstream_request_id(response.headers());
+        let body: String = bounded_text(response, 64 * 1024).await.unwrap_or_default();
+        telemetry::log(
+            &app.telemetry,
+            "warn",
+            &format!(
+                "official catalogue upstream replied status={status} requestId={} retryAfter={}",
+                if request_id.is_empty() {
+                    "-"
+                } else {
+                    request_id.as_str()
+                },
+                if retry_after.is_empty() {
+                    "-"
+                } else {
+                    retry_after.as_str()
+                },
+            ),
+        );
+        return Err(upstream_error_message(
+            "official catalogue upstream",
+            status,
+            &retry_after,
+            &body,
+        ));
     }
-    let value = bounded_json(response, 4 * 1024 * 1024)
-        .await
-        .map_err(|_| ())?;
-    let data = value["data"].as_array().ok_or(())?.clone();
+    let value = bounded_json(response, 4 * 1024 * 1024).await?;
+    let data = value["data"]
+        .as_array()
+        .ok_or_else(|| "the catalogue answer had no data list".to_string())?
+        .clone();
     *cache = Some((key, std::time::Instant::now(), data.clone()));
     Ok(data)
 }
@@ -1749,6 +2148,8 @@ mod route_tests {
             config: std::sync::Arc::new(super::RwLock::new(cfg)),
             path: std::sync::Arc::new(std::path::PathBuf::from("unused-test-config.json")),
             client: reqwest::Client::new(),
+            // The same split the real `App` uses: loopback probes must not honour the proxy.
+            local_client: super::discovery::client().unwrap(),
             runtime_token: runtime_token.map(str::to_string),
             telemetry: Default::default(),
             catalog_cache: Default::default(),
@@ -2253,5 +2654,94 @@ mod route_tests {
             !text.contains("discoveryAllowedHosts"),
             "a loopback probe must not be refused by the host gate: {text}"
         );
+    }
+    #[test]
+    fn upstream_errors_keep_the_status_and_the_provider_message() {
+        // The provider's own diagnosis and the retry hint are what the caller needs; both used to
+        // be thrown away in favour of a flat "returned HTTP 429".
+        let message = super::upstream_error_message(
+            "model upstream",
+            429,
+            "3",
+            r#"{"error":{"message":"Rate limit reached for gpt","type":"rate_limit_error","code":"rate_limit_exceeded"}}"#,
+        );
+        assert!(
+            message.starts_with("model upstream returned HTTP 429:"),
+            "{message}"
+        );
+        assert!(message.contains("Rate limit reached for gpt"), "{message}");
+        assert!(message.contains("type=rate_limit_error"), "{message}");
+        assert!(message.contains("code=rate_limit_exceeded"), "{message}");
+        assert!(message.contains("retry-after=3"), "{message}");
+        // A body that is not JSON still contributes a bounded excerpt.
+        let message = super::upstream_error_message(
+            "model upstream",
+            403,
+            "",
+            "<html><h1>Blocked</h1></html>",
+        );
+        assert_eq!(message, "model upstream returned HTTP 403: Blocked");
+        assert_eq!(
+            super::upstream_error_message("official catalogue upstream", 500, "", ""),
+            "official catalogue upstream returned HTTP 500"
+        );
+        // 502 stays the transport fallback: only a status a client can act on is passed through.
+        assert_eq!(super::upstream_status(429), 429);
+        assert_eq!(super::upstream_status(500), 500);
+        assert_eq!(super::upstream_status(302), 502);
+        assert_eq!(super::upstream_status(999), 502);
+    }
+    #[test]
+    fn error_excerpts_are_bounded_and_never_relay_a_credential() {
+        let body = r#"{"error":{"message":"invalid key sk-live-ABCDEFGHIJKLMNOP supplied","authorization":"Bearer sk-live-ABCDEFGHIJKLMNOP","apiKey":"sk-live-ABCDEFGHIJKLMNOP"}}"#;
+        let message = super::upstream_error_message("model upstream", 401, "", body);
+        assert!(!message.contains("ABCDEFGHIJKLMNOP"), "{message}");
+        assert!(message.contains("sk-***"), "{message}");
+        assert!(message.contains("invalid key"), "{message}");
+        assert!(super::scrub_secrets("token=abcdefghijklmnopqrstuvwxyz012345").contains("***"));
+        // A long opaque token is dropped, while ordinary prose is left alone.
+        assert_eq!(
+            super::scrub_secrets("aZ09secretVALUEwithLENGTH1234567890"),
+            "***"
+        );
+        assert_eq!(
+            super::scrub_secrets("the model refused the request"),
+            "the model refused the request"
+        );
+        // Nothing beyond the excerpt limit is even looked at.
+        let huge = format!("{} {}", "x".repeat(8192), "sk-live-ABCDEFGHIJKLMNOP");
+        assert!(!super::safe_excerpt(&huge).contains("sk-live"));
+    }
+    #[test]
+    fn capture_retention_drops_the_oldest_files_only() {
+        let dir = std::env::temp_dir().join(format!("accio-capture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A foreign file in the same directory has to survive the pruning.
+        std::fs::write(dir.join("notes.txt"), "keep me").unwrap();
+        for index in 0..5u64 {
+            std::fs::write(
+                dir.join(format!("generate-170000000000{index}-0.json")),
+                "{}",
+            )
+            .unwrap();
+        }
+        super::prune_captures(&dir, 3);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                "generate-1700000000003-0.json",
+                "generate-1700000000004-0.json",
+                "notes.txt"
+            ]
+        );
+        assert!(super::capture_limit() > 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
