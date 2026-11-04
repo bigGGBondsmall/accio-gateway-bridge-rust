@@ -12,6 +12,8 @@ const zlib = require('node:zlib');
 const binary = path.resolve(process.argv[2] || path.join(__dirname, '../target/debug/accio-gateway-bridge-rust'));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'accio-rust-parity-'));
 let child, provider, total = 0, failures = 0;
+// Gateways started by the credential-separation block, killed like the main one.
+const extraChildren = [];
 const captured = [];
 async function check(name, fn) { total++; try { await fn(); console.log(`PASS ${name}`); } catch (error) { failures++; console.error(`FAIL ${name}: ${error.stack}`); } }
 function frames(body) { return body.split(/\r?\n/).filter(s => s.startsWith('data:')).map(s => JSON.parse(s.slice(5).trim())); }
@@ -21,6 +23,8 @@ async function main() {
     const raw = Buffer.concat(chunks); let body; try {body = JSON.parse(raw);} catch {body = {};}
     captured.push({ path: req.url, method: req.method, body, raw: raw.toString(), headers: req.headers });
     if (req.url === '/api/llm/config/v2') { res.setHeader('content-type','application/json'); res.end(JSON.stringify({success:true,code:'200',data:[{provider:'alibaba',modelList:[{modelCode:'official'}]}]})); return; }
+    // The model-relay probe: proves an allowed (loopback) host is still probed.
+    if (req.url === '/v1/models') { res.setHeader('content-type','application/json'); res.end('{"data":[{"id":"fixture-model"}]}'); return; }
     if (req.url === '/v1/chat/completions') {
       if (body.model === 'truncate') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'); return; }
       if (body.model === 'tool') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"provider_call","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n'); return; }
@@ -226,7 +230,100 @@ async function main() {
     assert.ok(!/text\/html/.test(post.headers.get('content-type')||''),'POST / must not return panel HTML');
     await post.text();
   });
+  // ---- the model relay is not a credential-relay primitive ------------------------------------
+  await check('the model relay refuses a caller-supplied foreign host',async()=>{
+    // `baseUrl` comes from the request body and the probe may carry a stored apiKey: an
+    // unconstrained relay would aim this gateway's credential at an arbitrary host.
+    const refused=await req('/api/bridge/discover/models','POST',{baseUrl:'http://example.com:9999/v1',apiKey:'relayed-secret'});
+    const refusedText=await refused.text();
+    assert.strictEqual(refused.status,403,refusedText);
+    const body=JSON.parse(refusedText);
+    assert.match(body.error,/discoveryAllowedHosts/);
+    const text=JSON.stringify(body);
+    assert.ok(!text.includes('relayed-secret'),'the refusal must not echo the key');
+    assert.ok(!text.includes('example.com:9999/v1'),'the refusal must name the host, not the URL');
+    // A loopback host (what the panel's own detection uses) is still probed.
+    const allowed=await req('/api/bridge/discover/models','POST',{baseUrl:upstream+'/v1',apiKey:'relayed-secret'});
+    assert.strictEqual(allowed.status,200);
+    assert.deepStrictEqual((await allowed.json()).models,['fixture-model']);
+  });
+  // ---- one token, or a second secret: black-box on two extra gateways --------------------------
+  const waitListening=kid=>new Promise((resolve,reject)=>{
+    let out='',stderr='';
+    const timeout=setTimeout(()=>reject(new Error('startup timeout '+stderr)),15000);
+    kid.on('error',e=>{clearTimeout(timeout);reject(e);});
+    kid.on('exit',code=>{clearTimeout(timeout);reject(new Error(`premature exit ${code}: ${stderr}`));});
+    kid.stderr.on('data',c=>stderr+=c);
+    kid.stdout.on('data',c=>{out+=c;let i;while((i=out.indexOf('\n'))>=0){const line=out.slice(0,i);out=out.slice(i+1);try{const msg=JSON.parse(line);if(msg.event==='listening'){clearTimeout(timeout);resolve(msg.port);}}catch{}}});
+  });
+  const spawnGateway=async(name,server)=>{
+    const configPath=path.join(dir,name);
+    fs.writeFileSync(configPath,JSON.stringify({server:{host:'127.0.0.1',port:0,...server},upstream:{baseUrl:upstream},models:[{id:'openai',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'normal',apiKey:'synthetic-secret'}]}));
+    const kid=spawn(binary,['--config',configPath,'--port','0'],{stdio:['ignore','pipe','pipe'],env:process.env});
+    extraChildren.push(kid);
+    return `http://127.0.0.1:${await waitListening(kid)}`;
+  };
+  const call=(base,route,headers={},method='GET',body)=>fetch(base+route,{method,headers:{...(body!==undefined?{'content-type':'application/json'}:{}),...headers},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(5000)});
+  const splitBase=await spawnGateway('split-config.json',{token:'inference-secret',adminToken:'admin-secret',enforceToken:true});
+  const singleBase=await spawnGateway('single-config.json',{token:'inference-secret',enforceToken:true});
+  await check('an inference token is refused the management plane once an admin token exists',async()=>{
+    const inference={'x-gateway-token':'inference-secret'};
+    assert.strictEqual((await call(splitBase,'/api/bridge/status')).status,401,'a missing credential is a 401');
+    const refused=await call(splitBase,'/api/bridge/status',inference);
+    assert.strictEqual(refused.status,403,'an authenticated caller without the scope is a 403, not a 401');
+    assert.match((await refused.json()).error,/management/);
+    for(const route of ['/api/bridge/config','/api/bridge/models','/api/bridge/logs','/api/bridge/usage','/api/bridge/providers']){
+      assert.strictEqual((await call(splitBase,route,inference)).status,403,route);
+    }
+    assert.strictEqual((await call(splitBase,'/api/bridge/accio/launch',inference,'POST','{}')).status,403,'the launch scope is not part of inference');
+    assert.strictEqual((await call(splitBase,'/api/bridge/accio',inference)).status,403);
+    assert.strictEqual((await call(splitBase,'/healthz',inference)).status,200,'the health check stays in the data plane');
+    assert.strictEqual((await call(splitBase,'/dashboard')).status,200,'the panel page is still served without a credential');
+  });
+  await check('the admin token opens the management plane, and one token still opens everything',async()=>{
+    const admin={'x-gateway-token':'admin-secret'};
+    assert.strictEqual((await call(splitBase,'/api/bridge/status',admin)).status,200);
+    assert.strictEqual((await call(splitBase,'/api/bridge/status',{'authorization':'Bearer admin-secret'})).status,200,'the admin secret is accepted as a bearer token too');
+    // No admin token configured: today's single-token behaviour, unchanged.
+    const single={'x-gateway-token':'inference-secret'};
+    assert.strictEqual((await call(singleBase,'/api/bridge/status')).status,401);
+    for(const route of ['/api/bridge/status','/api/bridge/config','/api/bridge/models','/api/bridge/providers','/api/bridge/usage','/api/bridge/logs','/api/bridge/logging']){
+      assert.strictEqual((await call(singleBase,route,single)).status,200,route);
+    }
+    // The launch route is reached (an empty body is a 400) instead of being refused, so the single
+    // token still holds that scope. No body means nothing is ever started.
+    assert.strictEqual((await call(singleBase,'/api/bridge/accio/launch',single,'POST')).status,400);
+  });
+  await check('no response body echoes either secret',async()=>{
+    for(const [base,headers] of [[splitBase,{'x-gateway-token':'admin-secret'}],[singleBase,{'x-gateway-token':'inference-secret'}]]){
+      for(const route of ['/api/bridge/status','/api/bridge/config','/api/bridge/models','/api/bridge/providers','/api/bridge/usage','/api/bridge/logs','/api/bridge/logging','/dashboard']){
+        const response=await call(base,route,headers);
+        assert.strictEqual(response.status,200,route);
+        const text=await response.text();
+        for(const secret of ['admin-secret','inference-secret','synthetic-secret']){
+          assert.ok(!text.includes(secret),`${route} echoed ${secret}`);
+        }
+      }
+    }
+    const config=await (await call(splitBase,'/api/bridge/config',{'x-gateway-token':'admin-secret'})).json();
+    assert.strictEqual(config.config.server.hasAdminToken,true,'the panel may learn that a second secret exists');
+    assert.strictEqual(config.config.server.token,undefined,'the token itself is never serialised');
+  });
+  await check('a bearer equal to a local credential is never relayed, an Accio session still is',async()=>{
+    // Relaying the admin secret to the official upstream would hand it a local management
+    // credential; Node parity requires an unrelated Accio session to keep travelling.
+    captured.length=0;
+    const admin=await call(splitBase,'/unknown',{'authorization':'Bearer admin-secret','x-gateway-token':'admin-secret'});
+    assert.strictEqual(admin.status,207);
+    await admin.text();
+    assert.strictEqual(captured.at(-1).headers.authorization,undefined,'the admin bearer must not reach the upstream');
+    const session=await call(splitBase,'/unknown',{'authorization':'Bearer accio-session','x-gateway-token':'admin-secret'});
+    assert.strictEqual(session.status,207);
+    await session.text();
+    assert.strictEqual(captured.at(-1).headers.authorization,'Bearer accio-session');
+    assert.strictEqual(captured.at(-1).headers.authorization,'Bearer accio-session');
+  });
   console.log(`${total-failures}/${total} black-box Rust core checks passed`);
   if (failures) process.exitCode = 1;
 }
-main().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{if(child && child.exitCode===null){child.kill('SIGTERM');await Promise.race([once(child,'exit'),new Promise(resolve=>setTimeout(resolve,2000))]);if(child.exitCode===null)child.kill('SIGKILL');}if(provider){provider.closeAllConnections();await new Promise(resolve=>provider.close(resolve));}fs.rmSync(dir,{recursive:true,force:true});});
+main().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{if(child && child.exitCode===null){child.kill('SIGTERM');await Promise.race([once(child,'exit'),new Promise(resolve=>setTimeout(resolve,2000))]);if(child.exitCode===null)child.kill('SIGKILL');}for(const extra of extraChildren){if(extra.exitCode===null)extra.kill('SIGKILL');}if(provider){provider.closeAllConnections();await new Promise(resolve=>provider.close(resolve));}fs.rmSync(dir,{recursive:true,force:true});});

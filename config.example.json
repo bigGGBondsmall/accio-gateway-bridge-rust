@@ -1,12 +1,14 @@
 {
-  "_readme": "Copy to config.json for a fresh installation. Preserve your existing config.json when applying the patch. Add providers through the local management UI.",
+  "_readme": "Copy to config.json for a fresh installation. Preserve your existing config.json when applying the patch. Add providers through the local management UI. server.adminToken is optional: leave it empty for the single-token behaviour (one token for every route, unchanged); set it to give the data-plane token inference+catalogue only, so management/discovery/launch need the admin token. server.discoveryAllowedHosts lists non-loopback hosts the model-relay endpoint (POST /api/bridge/discover/models) may probe; loopback is always allowed.",
   "server": {
     "host": "127.0.0.1",
     "port": 8080,
     "maxBodyBytes": 26214400,
     "cors": true,
     "token": "",
+    "adminToken": "",
     "enforceToken": false,
+    "discoveryAllowedHosts": [],
     "logLevel": "info"
   },
   "upstream": {

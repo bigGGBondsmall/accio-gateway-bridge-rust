@@ -121,6 +121,34 @@ pub async fn list_models_for(
     parse_models(provider, &data)
         .ok_or_else(|| "upstream returned an unexpected response shape".into())
 }
+/// Hosts the model relay is allowed to probe: loopback, plus whatever the owner lists in
+/// `server.discoveryAllowedHosts`. `baseUrl` can come from the request body and the probe can carry
+/// a *stored* apiKey, which made this endpoint a credential-relay and SSRF primitive. The refusal
+/// names the host only - never the URL (it may embed a credential) and never the key itself.
+pub fn probe_host_allowed(cfg: &Value, base: &str) -> Result<(), String> {
+    let parsed =
+        url::Url::parse(base).map_err(|_| "baseUrl must be a valid http(s) URL".to_string())?;
+    let host = parsed
+        .host_str()
+        .ok_or("baseUrl must be a valid http(s) URL")?;
+    if crate::config::is_loopback(host) {
+        return Ok(());
+    }
+    let listed = cfg["server"]["discoveryAllowedHosts"]
+        .as_array()
+        .is_some_and(|hosts| {
+            hosts
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|allowed| allowed.eq_ignore_ascii_case(host))
+        });
+    if listed {
+        return Ok(());
+    }
+    Err(format!(
+        "host {host} is neither loopback nor listed in server.discoveryAllowedHosts; a stored model credential is only probed on allowed hosts"
+    ))
+}
 #[derive(Clone, Debug)]
 pub struct Probe {
     pub port: u16,
@@ -229,6 +257,10 @@ pub async fn list_models(
     let base = options["baseUrl"]
         .as_str()
         .ok_or((400, "baseUrl must be a valid http(s) URL".into()))?;
+    // Never aim the stored credential at a host the owner did not allow.
+    if let Err(host_error) = probe_host_allowed(cfg, base) {
+        return Err((403, host_error));
+    }
     let c = client().map_err(|e| (500, e))?;
     match list_models_for(
         &c,
@@ -365,6 +397,92 @@ mod tests {
                 .await
                 .is_err()
         );
+        task.await.unwrap();
+    }
+    #[test]
+    fn the_probe_host_gate_only_allows_loopback_and_listed_hosts() {
+        let mut cfg = crate::config::defaults();
+        for base in [
+            "http://127.0.0.1:11434",
+            "http://localhost:11434/v1",
+            "http://[::1]:11434",
+        ] {
+            assert_eq!(probe_host_allowed(&cfg, base), Ok(()), "{base}");
+        }
+        for base in [
+            "http://example.com/v1",
+            "http://169.254.169.254/latest/meta-data",
+            "https://api.openai.com/v1",
+        ] {
+            let error = probe_host_allowed(&cfg, base).unwrap_err();
+            assert!(error.contains("discoveryAllowedHosts"), "{error}");
+            // The refusal names the host; it must never echo the URL, whose userinfo could carry a
+            // credential, nor the key that would have been sent.
+            assert!(!error.contains("/v1"), "{error}");
+            assert!(!error.contains("/latest/meta-data"), "{error}");
+        }
+        // An allow-listed host is the owner's explicit decision; matching ignores case.
+        cfg["server"]["discoveryAllowedHosts"] = json!(["Api.Example.com"]);
+        assert_eq!(
+            probe_host_allowed(&cfg, "https://api.example.com/v1"),
+            Ok(())
+        );
+        assert!(probe_host_allowed(&cfg, "https://other.example.com/v1").is_err());
+        assert!(probe_host_allowed(&cfg, "not-a-url").is_err());
+    }
+    #[tokio::test]
+    async fn the_model_relay_refuses_a_foreign_host_before_connecting() {
+        let cfg = crate::config::defaults();
+        let error = list_models(
+            &cfg,
+            &client().unwrap(),
+            &json!({"baseUrl":"http://example.com:9999/v1","apiKey":"relayed-secret"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.0, 403);
+        assert!(error.1.contains("discoveryAllowedHosts"), "{}", error.1);
+        assert!(!error.1.contains("relayed-secret"), "{}", error.1);
+        assert!(!error.1.contains("example.com:9999/v1"), "{}", error.1);
+    }
+    #[tokio::test]
+    async fn a_stored_key_is_only_ever_sent_to_an_allowed_host() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut request = [0; 2048];
+            let count = s.read(&mut request).await.unwrap();
+            let text = String::from_utf8_lossy(&request[..count]).to_lowercase();
+            assert!(
+                text.contains("authorization: bearer stored-secret"),
+                "the relay probe must still authenticate at an allowed host: {text}"
+            );
+            let body = r#"{"data":[{"id":"loopback-model"}]}"#;
+            s.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        });
+        let cfg = crate::config::defaults();
+        let value = list_models(
+            &cfg,
+            &client().unwrap(),
+            &json!({"baseUrl":format!("http://127.0.0.1:{port}"),"apiKey":"stored-secret"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["models"], json!(["loopback-model"]));
         task.await.unwrap();
     }
 }

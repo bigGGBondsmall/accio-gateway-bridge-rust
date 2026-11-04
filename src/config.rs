@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub fn defaults() -> Value {
-    json!({"server":{"host":"127.0.0.1","port":8080,"maxBodyBytes":26214400,"cors":true,"token":"","enforceToken":false},"upstream":{"baseUrl":"https://phoenix-gw.alibaba.com","timeoutMs":300000,"apiKey":""},"catalog":{"enabled":true,"fetchOfficial":true,"providerName":"custom","providerDisplayName":"Custom AI","timeoutMs":8000},"models":[]})
+    json!({"server":{"host":"127.0.0.1","port":8080,"maxBodyBytes":26214400,"cors":true,"token":"","adminToken":"","enforceToken":false,"discoveryAllowedHosts":[]},"upstream":{"baseUrl":"https://phoenix-gw.alibaba.com","timeoutMs":300000,"apiKey":""},"catalog":{"enabled":true,"fetchOfficial":true,"providerName":"custom","providerDisplayName":"Custom AI","timeoutMs":8000},"models":[]})
 }
 pub fn normalize(mut config: Value) -> Result<Value, String> {
     if !config.is_object() {
@@ -71,8 +71,16 @@ pub fn normalize(mut config: Value) -> Result<Value, String> {
     {
         return Err("port must be 0..65535".into());
     }
-    if !config["server"]["token"].is_string() {
-        return Err("token must be a string".into());
+    for key in ["token", "adminToken"] {
+        if !config["server"][key].is_string() {
+            return Err(format!("server.{key} must be a string"));
+        }
+    }
+    if !config["server"]["discoveryAllowedHosts"]
+        .as_array()
+        .is_some_and(|hosts| hosts.iter().all(Value::is_string))
+    {
+        return Err("server.discoveryAllowedHosts must be a list of host names".into());
     }
     let host = config["server"]["host"]
         .as_str()
@@ -281,5 +289,29 @@ mod tests {
         // Case-only differences are still the same name.
         let case_only = with_models(vec![json!({"id":"a","aliases":["B"]}), json!({"id":"b"})]);
         assert!(route_name_conflict(&case_only).is_some());
+    }
+    #[test]
+    fn a_configuration_written_before_the_second_secret_still_loads() {
+        // An existing config.json has neither key; the defaults fill them in, so the file that is
+        // already running keeps loading and behaves as a single-token configuration.
+        let mut c = defaults();
+        c["server"].as_object_mut().unwrap().remove("adminToken");
+        c["server"]
+            .as_object_mut()
+            .unwrap()
+            .remove("discoveryAllowedHosts");
+        c["server"]["token"] = json!("saved-secret");
+        c["server"]["enforceToken"] = json!(true);
+        let normalised = normalize(c).unwrap();
+        assert_eq!(normalised["server"]["adminToken"], json!(""));
+        assert_eq!(normalised["server"]["discoveryAllowedHosts"], json!([]));
+        assert_eq!(normalised["server"]["token"], json!("saved-secret"));
+        // A malformed second secret is refused like any other wrong-typed field.
+        let mut broken = defaults();
+        broken["server"]["adminToken"] = json!(7);
+        assert!(normalize(broken).is_err());
+        let mut broken = defaults();
+        broken["server"]["discoveryAllowedHosts"] = json!([7]);
+        assert!(normalize(broken).is_err());
     }
 }
