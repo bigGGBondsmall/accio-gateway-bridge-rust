@@ -160,6 +160,9 @@ async function main() {
     const debugLines=(await(await req('/api/bridge/logs?lines=100')).json()).lines.filter(l=>l.level==='debug');
     assert.ok(debugLines.some(l=>l.msg.includes('generate openai ->')),JSON.stringify(debugLines.slice(0,3)));
     assert.ok(debugLines.some(l=>l.msg.startsWith('upstream replied status=200')),JSON.stringify(debugLines.slice(0,3)));
+    await generate('openai',{contents:[{role:'model',parts:[{functionCall:{name:'read'}}]},{parts:[{functionResponse:{name:'read',response:{ok:true}}}]}]});
+    const fed=(await(await req('/api/bridge/logs?lines=100')).json()).lines.filter(l=>l.level==='debug'&&l.msg.startsWith('tool results fed back: read'));
+    assert.ok(fed.length>0,'a tool continuation must log which results were fed back');
     const back=await(await req('/api/bridge/logging','POST',{level:'info'})).json();
     assert.strictEqual(back.level,'info');
     const count=async()=>(await(await req('/api/bridge/logs?lines=200')).json()).lines.filter(l=>l.level==='debug').length;

@@ -1084,6 +1084,28 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
             }
         ),
     );
+    // Debug: what the client feeds back from the previous turn. A workflow loop shows up here as
+    // the turn count and which tools returned, and the fed-back results are what a failing tool
+    // step looks like from the gateway side.
+    if let Some(contents) = body["contents"].as_array() {
+        let mut fed_back: Vec<String> = Vec::new();
+        for entry in contents {
+            if let Some(parts) = entry["parts"].as_array() {
+                for part in parts {
+                    if let Some(name) = part["functionResponse"]["name"].as_str() {
+                        fed_back.push(name.to_string());
+                    }
+                }
+            }
+        }
+        if !fed_back.is_empty() {
+            telemetry::log(
+                &app.telemetry,
+                "debug",
+                &format!("tool results fed back: {}", fed_back.join(", ")),
+            );
+        }
+    }
     let mut request = app
         .client
         .post(endpoint)
