@@ -52,7 +52,7 @@ cp config.example.json config.json
 | 流式输出 | 真实分块转发；SSE 多行/CRLF/CR/UTF-8、Ollama NDJSON 尾帧；客户端断开取消上游；上游因长度/令牌上限或内容过滤中止时返回带该原因的 error（用量保留），不再把半截调用标成 `finishReason: "TOOL_CALLS"` |
 | 错误处理 | 异常/截断流不伪装成功；模型请求不自动重试或转发另一模型，避免重复计费 |
 | 模型/提供商管理 | 增删改（`?id=`、路径式 `DELETE /api/bridge/models/<id>`、`POST /api/bridge/models/delete` 支持 body/query）、分组、默认模型、开关；密钥不回显，省略保留、空串清除 |
-| 管理面板 | 网关自身在 `/`、`/index.html`、`/dashboard`、`/dashboard/` 返回内嵌的管理面板（复用旧版面板，`no-store`）；模型操作改走 `data-model-action` / `data-model-toggle` 属性 + 委托监听，不再把模型 id 拼进内联 `onclick`/`onchange`（含引号的 id 不再弄坏按钮，也无法借 id 注入脚本）；管理调用统一经包装函数附带内存中的 `x-gateway-token`，401 时显示令牌输入条；面板页自身免令牌（`server.enforceToken` 为真时亦然，否则索取令牌的页面会被自己挡住），管理路由仍全部需认证；面板对已存密钥只显示 `hasKey`，编辑时**留空即保留**、输入新值即替换、显式清空才删除 |
+| 管理面板 | 网关自身在 `/`、`/index.html`、`/dashboard`、`/dashboard/` 返回内嵌的管理面板（复用旧版面板，`no-store`）；模型操作改走 `data-model-action` / `data-model-toggle` 属性 + 委托监听，不再把模型 id 拼进内联 `onclick`/`onchange`（含引号的 id 不再弄坏按钮，也无法借 id 注入脚本）；管理调用统一经包装函数附带内存中的 `x-gateway-token`，401 时显示令牌输入条；面板页自身免令牌（**仅限 GET**，非 GET 请求照常按普通路由代理与认证；`server.enforceToken` 为真时亦然，否则索取令牌的页面会被自己挡住），管理路由仍全部需认证；面板对已存密钥只显示 `hasKey`，编辑时**留空即保留**、输入新值即替换、显式清空才删除 |
 | 配置管理 | 白名单字段编辑；保存时拒绝重名（`modelCode` 或别名等于另一个模型的正式 `id` 时报错并点名两个模型；多个提供商共用一个 `upstreamModel` 仍允许）；验证私有副本后原子落盘；运行时管理令牌不持久化 |
 | 日志/用量 | 与 Node 版同形的有界日志（每行 `ts`/`level`/`msg`，另带 `model`；容量 1000 行）、等级/条数过滤；**记录等级可选**（`debug`/`info`/`warn`/`error`，默认 `info`）：启动时用 `ACCIO_BRIDGE_LOG_LEVEL` 或配置 `logging.level`（兼容旧的 `server.logLevel`），运行时用 `GET`/`POST /api/bridge/logging` 切换；低于阈值的行不入环，`debug` 行记录解析后的上游地址、上游状态、工具数、**客户端回填的工具结果名**与透传去向；请求数、错误数、耗时；每套不同的转发工具集记一条诊断日志；`ACCIO_BRIDGE_CAPTURE_DIR` 可选落盘生成请求；不是费用账单/Token 计费系统 |
 | 本地发现 | 显式触发才探测；有界并发/超时/响应体；支持指定提供商查询模型 |
@@ -68,7 +68,7 @@ cp config.example.json config.json
 
 - 默认仅回环地址；非回环绑定必须配置令牌，所有请求强制认证。外部浏览器 Origin 和不受信 Host 被拒绝。
 - 自定义模型只接收它自身保存的 API key，不接收官方 Cookie、官方 Authorization 或网关令牌；禁用上游重定向。
-- 管理面板页面本身免令牌提供（否则索取令牌的页面会被自己挡住），但每一项管理路由仍要求令牌；面板令牌由包装函数从内存取值附加到 `x-gateway-token`，只存内存，不写入浏览器存储、Cookie、配置或 URL。
+- 管理面板页面本身对 GET 请求免令牌提供（非 GET 请求走正常的代理与认证路径；否则索取令牌的页面会被自己挡住），但每一项管理路由仍要求令牌；面板令牌由包装函数从内存取值附加到 `x-gateway-token`，只存内存，不写入浏览器存储、Cookie、配置或 URL。
 - 官方入站标头按 Node 版语义转发：除逐跳头、重新计算的 `content-length` 与本网关管理令牌 `x-gateway-token` 外全部透传，包含 `cookie` / `authorization` / `x-accio-token`——Accio 的登录态正是这样在 `POST /api/mcp/ali1688/sgcookie` 这类路径上重放的；等于保存的 `server.token` 或运行时令牌的 Bearer 会被过滤，不会当作凭据发给官方上游。
 - 查询参数 `token` / `sg_k` 不透传；响应 Cookie 不透传；重定向不跟随。真实可用的认证方式仍以 Accio 自身登录态为准。
 - 修改隐藏密钥的目的地址时必须重新输入或明确清除密钥，避免把旧密钥自动发送给新地址。

@@ -87,8 +87,8 @@
                                                       "sha256":  "218afd8fc9e7e2ef9149bdc77970d1a5397aa23f4805c7a02e612104492395fa"
                                                   },
                   "docs/changes-2026-11-03.md":  {
-                                                     "bytes":  9999,
-                                                     "sha256":  "2360d7894362f43cf9e69de17d40c3f11aa2e5245d84e4baa95fbec809d700e3"
+                                                     "bytes":  11943,
+                                                     "sha256":  "ec213372e593b7301370445ef7a1c2c97829e7782eed935913e4e6003a0ff610"
                                                  },
                   "docs/local-discovery-and-accio.md":  {
                                                             "bytes":  3303,
@@ -115,12 +115,12 @@
                                   "sha256":  "ad90e6ebcca5e34570e556e056d382244d68798709ec51699af235d9dd7c3288"
                               },
                   "README.en.md":  {
-                                       "bytes":  8543,
-                                       "sha256":  "5743e502efd6367cee2e8f8c43c18ad0bb6de835d626ee78e9de4587ad8c44ea"
+                                       "bytes":  8720,
+                                       "sha256":  "8202f820c55250a441d2e463e23e03e6b102c0867f155d02bce82830ebdfdca2"
                                    },
                   "README.md":  {
-                                    "bytes":  10629,
-                                    "sha256":  "62efc5dace1718a41288968a1cea435e6a06a6ffb34e1b5cfdf028e5af410965"
+                                    "bytes":  10763,
+                                    "sha256":  "0a1bce5487d2620768d5edeaf20614e0c374cfd535f494ac873fc7a7ce901a32"
                                 },
                   "scripts/check.sh":  {
                                            "bytes":  214,
