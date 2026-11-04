@@ -260,7 +260,16 @@ impl Sink {
                 self.reason.as_deref(),
             ))
         } else {
-            let calls: Vec<Value> = std::mem::take(&mut self.calls).into_values().collect();
+            // A call the upstream never named is not a call. The previous build (and the Node
+            // implementation) drop those entries, which also lets the empty-stream check above
+            // report a stream that carried nothing usable instead of delivering `name: ""`.
+            let calls: Vec<Value> = std::mem::take(&mut self.calls)
+                .into_values()
+                .filter(|call| !call["name"].as_str().unwrap_or("").is_empty())
+                .collect();
+            if calls.is_empty() {
+                return Err("upstream returned an empty response stream".into());
+            }
             // A call the upstream never finished writing is reported as a failure instead of being
             // handed over as a runnable tool call; the usage it already reported is kept.
             if let Some(problem) = protocol::tool_calls_incomplete(self.reason.as_deref()) {
@@ -432,5 +441,19 @@ mod tests {
         assert_eq!(frame["finishReason"], "TOOL_CALLS");
         assert_eq!(frame["usageMetadata"]["totalTokenCount"], json!(14));
         assert_eq!(frame["content"]["parts"][0]["functionCall"]["name"], "read");
+    }
+    #[test]
+    fn a_nameless_tool_call_is_not_a_call() {
+        // Upstream announces a call but never names it; the older build (and the Node port) drop
+        // such entries, which lets the empty-stream check report that nothing usable arrived.
+        let mut sink = Sink::new(true);
+        sink.event(
+            &json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"arguments":"{}"}}]}}]}).to_string(),
+            false,
+        )
+        .unwrap();
+        sink.event("[DONE]", false).unwrap();
+        let error = sink.finish().unwrap_err();
+        assert!(error.contains("empty response"), "{error}");
     }
 }

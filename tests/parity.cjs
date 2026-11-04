@@ -24,6 +24,7 @@ async function main() {
     if (req.url === '/v1/chat/completions') {
       if (body.model === 'truncate') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'); return; }
       if (body.model === 'tool') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"provider_call","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n'); return; }
+      if (body.model === 'toolcutjson') { res.setHeader('content-type','application/json');res.end(JSON.stringify({choices:[{finish_reason:'length',message:{tool_calls:[{id:'cutj',function:{name:'read',arguments:'{"path":"a.tx'}}]}}],usage:{prompt_tokens:5,completion_tokens:9}})); return; }
       if (!body.stream) { res.setHeader('content-type','application/json'); res.end(JSON.stringify({choices:[{message:{content:'nonstream'},finish_reason:'stop'}],usage:{prompt_tokens:2,completion_tokens:3}})); return; }
       if (body.model === 'toolcut') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"cut","function":{"name":"read","arguments":"{\\"path\\":\\"a.tx"}}]}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":5,"completion_tokens":9}}\n\ndata: [DONE]\n\n'); return; }
       if (body.model === 'toolusage') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"kept","function":{"name":"read","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":9}}\n\ndata: [DONE]\n\n'); return; }
@@ -40,6 +41,7 @@ async function main() {
     {id:'toolcut',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'toolcut',enabled:true},
     {id:'off',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'normal',enabled:false},
     {id:'toolusage',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'toolusage',enabled:true},
+    {id:'toolcutjson',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'toolcutjson',enabled:true},
     {id:'tool',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'tool',enabled:true},
     {id:'truncate',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'truncate',enabled:true},
   ]};
@@ -102,7 +104,7 @@ async function main() {
     assert.equal((await req('/api/bridge/models/path%2Fdeleted','DELETE')).status,404);
     assert.equal((await req('/api/bridge/models/missing','DELETE')).status,404);
   await check('management panel is served by the gateway on every legacy path',async()=>{
-    for(const route of ['/','/index.html','/dashboard','/dashboard/']){
+    for(const route of ['/','/index.html','/dashboard','/dashboard/','/dashboard/index.html']){
       const r=await req(route);
       assert.equal(r.status,200,route);
       assert.match(r.headers.get('content-type'),/text\/html/);
@@ -202,6 +204,27 @@ async function main() {
     assert.strictEqual(unknown.status,207);
     // A configured alias keeps working.
     assert.strictEqual((await generate('alias'))[0].content.parts[0].text,'hello');
+  });
+  await check('a non-stream length stop keeps its usage and refuses the call',async()=>{
+    const r=await req('/api/adk/llm/generateContent','POST',{model:'toolcutjson',contents:[{parts:[{text:'x'}]}],stream:false});
+    assert.strictEqual(r.status,200);
+    const f=frames(await r.text());
+    assert.ok(f.some(x=>x.error&&/length/.test(x.error.message)),JSON.stringify(f));
+    assert.ok(!f.some(x=>x.finishReason==='TOOL_CALLS'),'a truncated call must not look runnable');
+    assert.strictEqual(f.at(-1).usageMetadata.totalTokenCount,14,'the non-stream failure keeps its usage');
+  });
+  await check('a colliding model name is refused on save, and the gateway keeps serving',async()=>{
+    // 'openai' is an existing formal id; claiming it as another model's modelCode would leave two
+    // models answering to one name, so the write must be refused while the editor is open.
+    const r=await req('/api/bridge/models','POST',{id:'collide',provider:'openai',baseUrl:upstream+'/v1',modelCode:'openai'});
+    assert.strictEqual(r.status,400,await r.text());
+    assert.match((await (await fetch(base+'/api/bridge/models',{signal:AbortSignal.timeout(5000)})).json()).models.map(m=>m.id).join(','),/^((?!collide).)*$/);
+    assert.strictEqual((await req('/healthz')).status,200);
+  });
+  await check('only GET serves the panel; other methods are proxied',async()=>{
+    const post=await req('/','POST',{});
+    assert.ok(!/text\/html/.test(post.headers.get('content-type')||''),'POST / must not return panel HTML');
+    await post.text();
   });
   console.log(`${total-failures}/${total} black-box Rust core checks passed`);
   if (failures) process.exitCode = 1;

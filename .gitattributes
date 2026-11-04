@@ -1,0 +1,8 @@
+# SOURCE-MANIFEST.json records the byte length and SHA-256 of every shipped file, so a checkout
+# that rewrites line endings no longer describes the delivery it was verified against. Pin every
+# text file to LF in the working tree (the committed blobs are already LF) and keep binaries raw.
+* text=auto eol=lf
+*.ico binary
+*.png binary
+*.exe binary
+*.dll binary

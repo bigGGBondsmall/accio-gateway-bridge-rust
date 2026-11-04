@@ -637,9 +637,11 @@ pub fn request(body: &Value, model: &Value, ollama: bool) -> Result<Value, Strin
 }
 fn reason(reason: Option<&str>) -> &'static str {
     match reason.unwrap_or("").to_ascii_lowercase().as_str() {
-        "length" | "max_tokens" => "MAX_TOKENS",
+        // Providers spell the same two stops differently; map the aliases alike so a truncated
+        // turn is never reported as a clean STOP.
+        "length" | "max_tokens" | "max_output_tokens" | "max_token" => "MAX_TOKENS",
         "tool_calls" | "tool_use" => "TOOL_CALLS",
-        "content_filter" => "SAFETY",
+        "content_filter" | "content-filter" | "safety" => "SAFETY",
         _ => "STOP",
     }
 }
@@ -791,7 +793,16 @@ pub fn response(body: &Value, ollama: bool) -> Result<Value, String> {
         // A tool call the upstream never finished writing must not be presented as runnable.
         if !prepared.is_empty() {
             if let Some(problem) = tool_calls_incomplete(finish) {
-                return Err(problem);
+                // Keep the reason and the usage the upstream already reported: the streaming path
+                // does the same, and dropping the usage here made the two disagree.
+                let mut frame = json!({
+                    "error": {"code": 502, "message": problem, "status": "UPSTREAM_ERROR"},
+                    "turnComplete": true
+                });
+                if let Some(tokens) = out.get("usageMetadata") {
+                    frame["usageMetadata"] = tokens.clone();
+                }
+                return Ok(frame);
             }
             out["finishReason"] = json!("TOOL_CALLS");
         }
@@ -1040,12 +1051,31 @@ mod adk_0372_tests {
     #[test]
     fn a_limited_finish_reason_turns_tool_calls_into_a_failure() {
         // Non-stream: the upstream said it stopped for length, so the call must not be delivered.
-        let error = response(
-            &json!({"choices":[{"finish_reason":"length","message":{"tool_calls":[{"id":"a","function":{"name":"read","arguments":"{\"path\":\"a.tx"}}]},"usage":{"prompt_tokens":3,"completion_tokens":4}}]}),
+        // The failure frame keeps the reason *and* the usage the upstream reported.
+        let failure = response(
+            &json!({"choices":[{"finish_reason":"length","message":{"tool_calls":[{"id":"a","function":{"name":"read","arguments":"{\"path\":\"a.tx"}}]}}],"usage":{"prompt_tokens":3,"completion_tokens":4}}),
             false,
         )
-        .unwrap_err();
-        assert!(error.contains("length"), "{error}");
+        .unwrap();
+        assert!(failure["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("length"));
+        assert_eq!(failure["turnComplete"], true);
+        assert_eq!(failure["usageMetadata"]["totalTokenCount"], json!(7));
+        assert!(
+            failure["content"].is_null(),
+            "the half-written call must not be delivered"
+        );
+        // A provider spelling the limit differently gets the same treatment.
+        assert!(response(
+            &json!({"choices":[{"finish_reason":"max_output_tokens","message":{"tool_calls":[{"id":"a","function":{"name":"read","arguments":"{}"}}]}}]}),
+            false,
+        )
+        .unwrap()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("max_output_tokens"));
         // A normal tool_calls finish still delivers, and keeps its usage.
         let ok = response(
             &json!({"choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"a","function":{"name":"read","arguments":"{\"path\":\"a.txt\"}"}}]}}],"usage":{"prompt_tokens":3,"completion_tokens":4}}),

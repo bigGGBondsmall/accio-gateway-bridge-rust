@@ -212,6 +212,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .filter(|s| !s.is_empty());
     c = config::normalize(c).map_err(std::io::Error::other)?;
+    // A configuration whose model names collide is refused on save, but a file that already has the
+    // collision must still start: warn (on stderr, before the log ring exists) and carry on, so the
+    // owner can repair it in the panel instead of being locked out.
+    if let Some(conflict) = config::route_name_conflict(&c) {
+        eprintln!("config: {conflict}");
+    }
     let address = format!(
         "{}:{}",
         c["server"]["host"].as_str().unwrap(),
@@ -274,8 +280,8 @@ async fn handle(
         }
     }
     let management = path.starts_with("/api/bridge/");
-    let panel = is_panel_path(&path);
     let method = req.method().clone();
+    let panel = is_panel_path(method.as_str(), &path);
     let headers = req.headers().clone();
     let uri = req.uri().clone();
     if !validate_origin(&headers, &cfg) {
@@ -362,7 +368,6 @@ fn route_model<'a>(models: &'a [Value], requested: &str) -> RouteOutcome<'a> {
                 .as_array()
                 .is_some_and(|a| a.iter().any(|s| same(Some(s))))
     };
-    let mut saw_disabled = None;
     for tier in ["id", "modelCode", "aliases", "upstreamModel"] {
         let hits: Vec<&Value> = models
             .iter()
@@ -384,8 +389,10 @@ fn route_model<'a>(models: &'a [Value], requested: &str) -> RouteOutcome<'a> {
             .filter(|m| m["enabled"] != false)
             .collect();
         if enabled.is_empty() {
-            saw_disabled = Some(hits[0]["id"].as_str().unwrap_or(requested).to_string());
-            continue;
+            // The name exists but is switched off. Report that instead of letting a lower tier
+            // answer for it: another enabled model's alias must not take over a formal id, and a
+            // silent reroute is exactly the confusion this resolution order exists to remove.
+            return RouteOutcome::Disabled(hits[0]["id"].as_str().unwrap_or(requested).to_string());
         }
         // Say so when another enabled model also answers to this name, so an ambiguous
         // configuration is visible in the log instead of only showing up as a wrong provider.
@@ -405,10 +412,7 @@ fn route_model<'a>(models: &'a [Value], requested: &str) -> RouteOutcome<'a> {
         });
         return RouteOutcome::Found(enabled[0], note);
     }
-    match saw_disabled {
-        Some(id) => RouteOutcome::Disabled(id),
-        None => RouteOutcome::Unknown,
-    }
+    RouteOutcome::Unknown
 }
 #[allow(clippy::too_many_arguments)] // Explicit request metadata avoids retaining a consumed HTTP body.
 async fn dispatch(
@@ -426,7 +430,7 @@ async fn dispatch(
     // The management panel is served by the gateway itself, on the same paths the older build
     // used, so the URL people already had keeps working. `canonical()` reduces a trailing slash
     // to nothing, which makes "/" an empty string and "/dashboard/" a plain "/dashboard".
-    if is_panel_path(path) {
+    if is_panel_path(method.as_str(), path) {
         return panel_response();
     }
     if method == "GET" && (path == "/healthz" || path == "/__bridge/health") {
@@ -462,6 +466,11 @@ async fn dispatch(
             Ok(v) => v,
             Err((status, message)) => return error(status, &message),
         };
+        // Two models answering to one name is the caller's mistake, so report it as such rather
+        // than as a gateway fault. `config::save` re-checks as the last gate before disk.
+        if let Some(conflict) = config::route_name_conflict(&next) {
+            return error(400, &conflict);
+        }
         if let Err(e) = config::save(&app.path, &next).await {
             return error(500, &e);
         }
@@ -528,6 +537,9 @@ async fn dispatch(
             Ok(v) => v,
             Err(e) => return error(400, &e),
         };
+        if let Some(conflict) = config::route_name_conflict(&next) {
+            return error(400, &conflict);
+        }
         if let Err(e) = config::save(&app.path, &next).await {
             return error(500, &e);
         }
@@ -614,6 +626,9 @@ async fn dispatch(
             }
             json!({"model":config::public_model(&model)})
         };
+        if let Some(conflict) = config::route_name_conflict(&next) {
+            return error(400, &conflict);
+        }
         if let Err(e) = config::save(&app.path, &next).await {
             return error(500, &e);
         }
@@ -987,8 +1002,8 @@ fn body_snippet(body: &str) -> String {
 /// Paths that serve the static management panel (the older build used all of them). The page holds
 /// no secrets, so it is also served without a token: otherwise the page that asks for the token
 /// would itself be blocked, which is how `server.enforceToken` used to make the panel unusable.
-fn is_panel_path(path: &str) -> bool {
-    ["", "/index.html", "/dashboard", "/dashboard/index.html"].contains(&path)
+fn is_panel_path(method: &str, path: &str) -> bool {
+    method == "GET" && ["", "/index.html", "/dashboard", "/dashboard/index.html"].contains(&path)
 }
 /// keep rendering stale model lists after an edit.
 fn panel_response() -> Response {
@@ -1272,6 +1287,12 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
         };
         return match protocol::response(&value, ollama) {
             Ok(mut frame) => {
+                // An upstream that stopped early produces an error frame here: keep the reason and
+                // the usage it reported, count the turn as failed, and do not overwrite it with a
+                // generic "no visible content" message.
+                if frame.get("error").is_some() {
+                    return single_frame(frame);
+                }
                 if !thoughts_enabled {
                     if let Some(parts) = frame["content"]["parts"].as_array_mut() {
                         parts.retain(|part| part["thought"] != true);
@@ -1295,7 +1316,7 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
         if failed||sink.terminal{break;}
       }
       if !failed&&!sink.terminal{match decoder.eof(){Ok(events)=>for event in events{match sink.event(&event,ollama){Ok(frames)=>for frame in frames{yield Ok(sse(&frame));},Err(e)=>{yield Ok(sse(&stream::error_frame(&e)));failed=true;break;}}},Err(e)=>{yield Ok(sse(&stream::error_frame(&e)));failed=true;}}}
-      if !failed{let frame=match sink.finish(){Ok(v)=>{turn.success();v},Err(e)=>stream::error_frame(&e)};yield Ok(sse(&frame));}
+      if !failed{let frame=match sink.finish(){Ok(v)=>{if v.get("error").is_none(){turn.success();}v},Err(e)=>stream::error_frame(&e)};yield Ok(sse(&frame));}
     };
     sse_response(output)
 }
@@ -1419,7 +1440,12 @@ mod route_tests {
     #[test]
     fn the_panel_is_served_without_a_token_but_everything_else_is_not() {
         for path in ["", "/index.html", "/dashboard", "/dashboard/index.html"] {
-            assert!(super::is_panel_path(path), "{path} serves the panel");
+            assert!(super::is_panel_path("GET", path), "{path} serves the panel");
+            // The Node build serves the page for GET only; a POST used to be answered with HTML.
+            assert!(
+                !super::is_panel_path("POST", path),
+                "POST {path} must be proxied"
+            );
         }
         for path in [
             "/api/bridge/status",
@@ -1427,7 +1453,7 @@ mod route_tests {
             "/api/llm/config/v2",
             "/dashboard/x",
         ] {
-            assert!(!super::is_panel_path(path), "{path} must stay gated");
+            assert!(!super::is_panel_path("GET", path), "{path} must stay gated");
         }
     }
     #[test]

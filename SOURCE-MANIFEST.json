@@ -2,6 +2,10 @@
     "kind":  "source-only",
     "date":  "2026-11-03",
     "files":  {
+                  ".gitattributes":  {
+                                         "bytes":  362,
+                                         "sha256":  "55f4c73d5540b28bd07232293afd2be535df6e9c326d2a5dac867ddf9454830c"
+                                     },
                   ".github/workflows/windows-build.yml":  {
                                                               "bytes":  2207,
                                                               "sha256":  "924a62931f133d44aa0eabc471425d97a19ab82263a231007bcff7960c152143"
@@ -127,8 +131,8 @@
                                        "sha256":  "9f376d7cf348a47ebcb4c1978f78afdfdd4fb58bf99db70957d5163019efd90c"
                                    },
                   "src/config.rs":  {
-                                        "bytes":  9932,
-                                        "sha256":  "01ef23a7f6a20524407b0891f7b66b311a9d6fd30910cdd9201b4272cc92e7bc"
+                                        "bytes":  10965,
+                                        "sha256":  "1ab809ed4df6ef538e322fe2d1a912c9d231b2afff37907551d3fb0bab28f8c4"
                                     },
                   "src/dashboard.html":  {
                                              "bytes":  64490,
@@ -139,24 +143,24 @@
                                            "sha256":  "f22b65fa16337235598843fdf63da96e20c6f06675b7616f80ed958c3ed6c5c5"
                                        },
                   "src/main.rs":  {
-                                      "bytes":  60180,
-                                      "sha256":  "35536186aa74d301faf06175c7d239ab73ee859c3c2e42504efe2decadb932ba"
+                                      "bytes":  61978,
+                                      "sha256":  "1baabe29fc805907061039632ddc984e100e3bdb3298342c4ce1a6f6e1bc83fe"
                                   },
                   "src/management.rs":  {
                                             "bytes":  18143,
                                             "sha256":  "4c19821bca94de2a5957b11b1be1c4daa5c571ca6b8a708f7e651d454aba38ee"
                                         },
                   "src/protocol.rs":  {
-                                          "bytes":  41857,
-                                          "sha256":  "0fec14628f109cc6938a4ac3dd807fd32484f49640bc2215c8ea01ed4f0c5a28"
+                                          "bytes":  43408,
+                                          "sha256":  "49392f0e79245aa13af2f3075dfe8acb1dd5fd942c4acb028247c0914b2950d3"
                                       },
                   "src/protocol-fixtures.json":  {
                                                      "bytes":  20351,
                                                      "sha256":  "cf6846fbf6b387bd5ffa62c503471093d8e90a6857c652ef0b4a9610790eaedb"
                                                  },
                   "src/stream.rs":  {
-                                        "bytes":  16854,
-                                        "sha256":  "f2a34830e87b545236c9fe92dd84cf133cb6b63bef5a2e778c93acb475c1756f"
+                                        "bytes":  18028,
+                                        "sha256":  "62b059018c6e746d7db6b5dee17e8d0476278ed9c524439f71bc07b9294d418d"
                                     },
                   "src/telemetry.rs":  {
                                            "bytes":  6685,
@@ -183,8 +187,8 @@
                                                "sha256":  "42ef25279e5791f95f0bbac70894f92c03fe683700798847a897ad8bbfab423f"
                                            },
                   "tests/parity.cjs":  {
-                                           "bytes":  20566,
-                                           "sha256":  "c8ce02434d7628e022c5c51a848b5fed6a598da6e2d3951dd1b6bb8535cbedc8"
+                                           "bytes":  22535,
+                                           "sha256":  "662241f9e5a074c195c59d7551a672d7a2548ecf089299a26752353adae4555b"
                                        },
                   "tests/upstream-stream.cjs":  {
                                                     "bytes":  7202,

@@ -43,35 +43,6 @@ pub fn normalize(mut config: Value) -> Result<Value, String> {
             m["isDefault"] = json!(true);
         }
     }
-    // A `modelCode` or alias that repeats another model's formal id leaves two models answering to
-    // one name. Routing resolves that by tier (a formal id wins), but a save that creates the
-    // collision is almost certainly a mistake, so refuse it while the editor is still open. This is
-    // the last use of `models`, so the mutable borrow above ends here.
-    let mut claimed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for model in models.iter() {
-        if let Some(id) = model["id"].as_str().filter(|s| !s.is_empty()) {
-            claimed.insert(id.to_lowercase(), id.to_string());
-        }
-    }
-    for model in models.iter() {
-        let owner = model["id"].as_str().unwrap_or("");
-        let mut secondary: Vec<String> = Vec::new();
-        if let Some(code) = model["modelCode"].as_str() {
-            secondary.push(code.to_string());
-        }
-        if let Some(list) = model["aliases"].as_array() {
-            secondary.extend(list.iter().filter_map(|a| a.as_str().map(str::to_string)));
-        }
-        for name in secondary {
-            if let Some(other) = claimed.get(&name.to_lowercase()) {
-                if !other.eq_ignore_ascii_case(owner) {
-                    return Err(format!(
-                        "model {owner} also answers to {name:?}, which is the id of {other}; rename one of them"
-                    ));
-                }
-            }
-        }
-    }
     for (section, keys) in [
         ("server", vec!["cors", "enforceToken"]),
         ("catalog", vec!["enabled", "fetchOfficial"]),
@@ -194,6 +165,11 @@ pub async fn save(path: &Path, v: &Value) -> Result<(), String> {
     if v["disableDiskSave"] == true {
         return Ok(());
     }
+    // Every write path (config edits, model create/update/delete) lands here, which is the only
+    // place that can refuse a colliding configuration before it reaches the disk.
+    if let Some(conflict) = route_name_conflict(v) {
+        return Err(conflict);
+    }
     let bytes = serde_json::to_vec_pretty(v).map_err(|_| "serialization failed")?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -221,6 +197,43 @@ pub async fn save(path: &Path, v: &Value) -> Result<(), String> {
         .map_err(|_| "cannot replace config atomically")?;
     Ok(())
 }
+
+/// Name collision between models: a `modelCode` or alias that repeats another model's formal `id`
+/// leaves two models answering to one name.
+///
+/// Routing resolves that by tier, but a configuration that creates it is almost certainly a
+/// mistake, so a *persisted* save is refused while the editor is still open (`save` enforces it and
+/// the write handlers report it as a 400). Loading only warns, so an already-collided file can still
+/// be started and repaired instead of locking its owner out of the panel.
+pub fn route_name_conflict(config: &Value) -> Option<String> {
+    let models = config["models"].as_array()?;
+    let mut claimed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for model in models.iter() {
+        if let Some(id) = model["id"].as_str().filter(|s| !s.is_empty()) {
+            claimed.insert(id.to_lowercase(), id.to_string());
+        }
+    }
+    for model in models.iter() {
+        let owner = model["id"].as_str().unwrap_or("");
+        let mut secondary: Vec<String> = Vec::new();
+        if let Some(code) = model["modelCode"].as_str() {
+            secondary.push(code.to_string());
+        }
+        if let Some(list) = model["aliases"].as_array() {
+            secondary.extend(list.iter().filter_map(|a| a.as_str().map(str::to_string)));
+        }
+        for name in secondary {
+            if let Some(other) = claimed.get(&name.to_lowercase()) {
+                if !other.eq_ignore_ascii_case(owner) {
+                    return Some(format!(
+                        "model {owner} also answers to {name:?}, which is the id of {other}; rename one of them"
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,24 +254,32 @@ mod tests {
         let with_models = |models: Vec<Value>| {
             let mut c = defaults();
             c["models"] = json!(models);
-            normalize(c)
+            normalize(c).unwrap()
         };
         // Two providers, the first claiming "fast" as an alias and the second called "fast".
         let collision = with_models(vec![
             json!({"id":"provider-a","aliases":["fast"]}),
             json!({"id":"fast"}),
         ]);
-        let message = collision.unwrap_err();
+        let message = route_name_conflict(&collision).unwrap();
         assert!(message.contains("also answers to \"fast\""), "{message}");
+        // Loading must still succeed: refusing to start would lock the owner out of the panel that
+        // could repair the collision.
+        assert!(normalize(collision).is_ok());
 
         // Sharing an upstream model name across providers is legitimate and must stay allowed.
-        let shared_upstream = with_models(vec![
+        let shared = with_models(vec![
             json!({"id":"a","upstreamModel":"gpt-4o"}),
             json!({"id":"b","upstreamModel":"gpt-4o"}),
         ]);
-        assert!(shared_upstream.is_ok());
+        assert_eq!(route_name_conflict(&shared), None);
 
         // A model repeating its own id as an alias is not a conflict.
-        assert!(with_models(vec![json!({"id":"a","modelCode":"a","aliases":["a"]})]).is_ok());
+        let own_name = with_models(vec![json!({"id":"a","modelCode":"a","aliases":["a"]})]);
+        assert_eq!(route_name_conflict(&own_name), None);
+
+        // Case-only differences are still the same name.
+        let case_only = with_models(vec![json!({"id":"a","aliases":["B"]}), json!({"id":"b"})]);
+        assert!(route_name_conflict(&case_only).is_some());
     }
 }
