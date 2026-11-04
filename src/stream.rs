@@ -91,6 +91,7 @@ pub struct Sink {
     next_call: u64,
     thoughts_enabled: bool,
     emitted_parts: bool,
+    hidden_reasoning: bool,
     usage: Option<Value>,
     reason: Option<String>,
     pub terminal: bool,
@@ -103,12 +104,20 @@ impl Sink {
             next_call: 0,
             thoughts_enabled,
             emitted_parts: false,
+            hidden_reasoning: false,
             calls: BTreeMap::new(),
             usage: None,
             reason: None,
             terminal: false,
             finished: false,
         }
+    }
+    /// Remember that the upstream sent reasoning this request asked not to receive, so a turn whose
+    /// only output was that reasoning is reported as empty instead of as a success.
+    fn note_hidden_reasoning(&mut self, values: [&Value; 2]) {
+        self.hidden_reasoning |= values
+            .iter()
+            .any(|v| v.as_str().is_some_and(|t| !t.is_empty()));
     }
     pub fn event(&mut self, s: &str, ollama: bool) -> Result<Vec<Value>, String> {
         if s.trim() == "[DONE]" {
@@ -134,6 +143,8 @@ impl Sink {
                 {
                     out.push(protocol::thought_frame(t));
                 }
+            } else {
+                self.note_hidden_reasoning([&v["message"]["thinking"], &v["thinking"]]);
             }
             if let Some(calls) = v["message"]["tool_calls"].as_array() {
                 for c in calls {
@@ -181,6 +192,10 @@ impl Sink {
                         {
                             out.push(protocol::thought_frame(t));
                         }
+                    } else {
+                        // `note_hidden_reasoning` is what lets finish() tell a successful text turn
+                        // apart from one whose only output was thinking the caller refused.
+                        self.note_hidden_reasoning([&d["reasoning_content"], &d["reasoning"]]);
                     }
                     if let Some(cs) = d["tool_calls"].as_array() {
                         for call in cs {
@@ -255,6 +270,14 @@ impl Sink {
             return Err("upstream returned an empty response stream".into());
         }
         if self.calls.is_empty() {
+            // Thinking was switched off for this request, so reasoning the upstream sent was never
+            // delivered: a turn that produced nothing else has no visible content, which is how the
+            // non-streaming path already reports the same upstream behaviour.
+            if self.hidden_reasoning && !self.emitted_parts {
+                return Err(
+                    "upstream returned no visible content after thinking was disabled".into(),
+                );
+            }
             Ok(protocol::done_frame(
                 self.usage.take(),
                 self.reason.as_deref(),
@@ -268,7 +291,19 @@ impl Sink {
                 .filter(|call| !call["name"].as_str().unwrap_or("").is_empty())
                 .collect();
             if calls.is_empty() {
-                return Err("upstream returned an empty response stream".into());
+                // Every call was unnamed, so this turn carries no call at all. Failing here would
+                // throw away an answer whose text has already reached the client, so the turn ends
+                // like the `calls.is_empty()` branch above, with one difference: a tool-call finish
+                // reason promises a call the client cannot run, so it is reported as a stop. Any
+                // other reason (a limit, a content filter) is kept, so the cause stays visible.
+                if !self.emitted_parts && self.usage.is_none() && self.reason.is_none() {
+                    return Err("upstream returned an empty response stream".into());
+                }
+                let reason = self
+                    .reason
+                    .clone()
+                    .filter(|r| !protocol::tool_reason(Some(r.as_str())));
+                return Ok(protocol::done_frame(self.usage.take(), reason.as_deref()));
             }
             // A call the upstream never finished writing is reported as a failure instead of being
             // handed over as a runnable tool call; the usage it already reported is kept.
@@ -455,5 +490,66 @@ mod tests {
         sink.event("[DONE]", false).unwrap();
         let error = sink.finish().unwrap_err();
         assert!(error.contains("empty response"), "{error}");
+    }
+    #[test]
+    fn content_survives_a_stray_unnamed_tool_call() {
+        // The upstream sent text and then announced a call it never named. The text is already on
+        // the wire, so failing the turn would replace a real answer with an error; the tool-call
+        // finish reason would also promise a call the client cannot run. The turn therefore ends as
+        // a stop that keeps the text and the usage.
+        let mut sink = Sink::new(true);
+        sink.event(
+            &json!({"choices":[{"delta":{"content":"hello"}}]}).to_string(),
+            false,
+        )
+        .unwrap();
+        sink.event(
+            &json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}).to_string(),
+            false,
+        )
+        .unwrap();
+        let frame = sink.finish().unwrap();
+        assert!(frame.get("error").is_none(), "{frame}");
+        assert_eq!(frame["finishReason"], "STOP");
+        assert_eq!(frame["usageMetadata"]["totalTokenCount"], json!(4));
+    }
+    #[test]
+    fn a_limit_stop_with_only_unnamed_calls_keeps_its_reason() {
+        // Dropping the unusable call must not erase why the upstream stopped.
+        let mut sink = Sink::new(true);
+        sink.event(
+            &json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":"length"}]}).to_string(),
+            false,
+        )
+        .unwrap();
+        let frame = sink.finish().unwrap();
+        assert_eq!(frame["finishReason"], "MAX_TOKENS");
+    }
+    #[test]
+    fn a_turn_with_only_hidden_thinking_is_a_failure() {
+        // Thinking was switched off for this request, so nothing the upstream sent reached the
+        // client; the usage it reported must not turn that into a successful empty turn.
+        let mut sink = Sink::new(false);
+        sink.event(
+            &json!({"choices":[{"delta":{"reasoning_content":"private thought"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}).to_string(),
+            false,
+        )
+        .unwrap();
+        let error = sink.finish().unwrap_err();
+        assert!(error.contains("no visible content"), "{error}");
+    }
+    #[test]
+    fn disabled_thinking_still_reports_a_text_turn() {
+        let mut sink = Sink::new(false);
+        assert_eq!(
+            sink.event(
+                &json!({"choices":[{"delta":{"reasoning_content":"private thought","content":"answer"},"finish_reason":"stop"}]}).to_string(),
+                false,
+            )
+            .unwrap()
+            .len(),
+            1
+        );
+        assert_eq!(sink.finish().unwrap()["finishReason"], "STOP");
     }
 }

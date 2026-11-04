@@ -143,24 +143,24 @@
                                            "sha256":  "f22b65fa16337235598843fdf63da96e20c6f06675b7616f80ed958c3ed6c5c5"
                                        },
                   "src/main.rs":  {
-                                      "bytes":  61978,
-                                      "sha256":  "1baabe29fc805907061039632ddc984e100e3bdb3298342c4ce1a6f6e1bc83fe"
+                                      "bytes":  62134,
+                                      "sha256":  "f328daa48402a728bfc977a88019fc4eb2460b8f3c8c3e1c6a1717bb7af7a6ee"
                                   },
                   "src/management.rs":  {
                                             "bytes":  18143,
                                             "sha256":  "4c19821bca94de2a5957b11b1be1c4daa5c571ca6b8a708f7e651d454aba38ee"
                                         },
                   "src/protocol.rs":  {
-                                          "bytes":  43408,
-                                          "sha256":  "49392f0e79245aa13af2f3075dfe8acb1dd5fd942c4acb028247c0914b2950d3"
+                                          "bytes":  44213,
+                                          "sha256":  "6693f7a0060f0cea3b544805ace43e9695e300fda67c7d587b4ce561ca7b4517"
                                       },
                   "src/protocol-fixtures.json":  {
                                                      "bytes":  20351,
                                                      "sha256":  "cf6846fbf6b387bd5ffa62c503471093d8e90a6857c652ef0b4a9610790eaedb"
                                                  },
                   "src/stream.rs":  {
-                                        "bytes":  18028,
-                                        "sha256":  "62b059018c6e746d7db6b5dee17e8d0476278ed9c524439f71bc07b9294d418d"
+                                        "bytes":  23006,
+                                        "sha256":  "6d61df890c30a49917425484a2fba0b9d21a2e8b191fa75562500215ae337e65"
                                     },
                   "src/telemetry.rs":  {
                                            "bytes":  6685,

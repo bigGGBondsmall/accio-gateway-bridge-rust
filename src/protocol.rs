@@ -635,12 +635,22 @@ pub fn request_with_report(
 pub fn request(body: &Value, model: &Value, ollama: bool) -> Result<Value, String> {
     request_with_report(body, model, ollama).map(|(payload, _)| payload)
 }
+/// True when the upstream's finish reason announces tool calls rather than a finished answer. The
+/// streaming sink uses this to drop such a reason once every call it announced turned out unusable.
+pub fn tool_reason(finish: Option<&str>) -> bool {
+    matches!(
+        finish.unwrap_or("").to_ascii_lowercase().as_str(),
+        "tool_calls" | "tool_use"
+    )
+}
 fn reason(reason: Option<&str>) -> &'static str {
+    if tool_reason(reason) {
+        return "TOOL_CALLS";
+    }
     match reason.unwrap_or("").to_ascii_lowercase().as_str() {
-        // Providers spell the same two stops differently; map the aliases alike so a truncated
+        // Providers spell the same stops differently; map the aliases alike so a truncated
         // turn is never reported as a clean STOP.
         "length" | "max_tokens" | "max_output_tokens" | "max_token" => "MAX_TOKENS",
-        "tool_calls" | "tool_use" => "TOOL_CALLS",
         "content_filter" | "content-filter" | "safety" => "SAFETY",
         _ => "STOP",
     }
@@ -701,7 +711,12 @@ pub fn thought_frame(text: &str) -> Value {
 fn stopped_by_limit(finish: &str) -> bool {
     matches!(
         finish.to_ascii_lowercase().as_str(),
-        "length" | "max_tokens" | "max_output_tokens" | "content_filter" | "content-filter"
+        "length"
+            | "max_tokens"
+            | "max_output_tokens"
+            | "content_filter"
+            | "content-filter"
+            | "safety"
     )
 }
 
@@ -785,6 +800,13 @@ pub fn response(body: &Value, ollama: bool) -> Result<Value, String> {
     if let Some(calls) = message["tool_calls"].as_array() {
         let prepared: Vec<Value> = calls
             .iter()
+            .filter(|c| {
+                // A call the upstream never named is not a call: the streaming path drops those
+                // entries too, so an unnamed one can never reach the client as `name: null`.
+                c["function"]["name"]
+                    .as_str()
+                    .is_some_and(|name| !name.is_empty())
+            })
             .map(|c| {
                 let (args, args_json) = call_args(&c["function"]["arguments"]);
                 json!({"name":c["function"]["name"],"args":args,"argsJson":args_json,"id":c["id"]})

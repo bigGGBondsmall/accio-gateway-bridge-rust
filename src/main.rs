@@ -999,12 +999,6 @@ fn body_snippet(body: &str) -> String {
 /// The embedded management panel, reused verbatim from the working build.
 ///
 /// `no-store` matters: the panel talks to the live management API, and a cached copy would
-/// Paths that serve the static management panel (the older build used all of them). The page holds
-/// no secrets, so it is also served without a token: otherwise the page that asks for the token
-/// would itself be blocked, which is how `server.enforceToken` used to make the panel unusable.
-fn is_panel_path(method: &str, path: &str) -> bool {
-    method == "GET" && ["", "/index.html", "/dashboard", "/dashboard/index.html"].contains(&path)
-}
 /// keep rendering stale model lists after an edit.
 fn panel_response() -> Response {
     Response::builder()
@@ -1013,6 +1007,14 @@ fn panel_response() -> Response {
         .header("cache-control", "no-store")
         .body(Body::from(include_str!("dashboard.html")))
         .unwrap()
+}
+/// Paths that serve the static management panel (the older build used all of them). The page holds
+/// no secrets, so it is also served without a token — but for GET only: any other method keeps the
+/// normal routing and authentication, so a POST can never be answered with the page. Without the
+/// exemption the page that asks for the token would itself be blocked by it, which is how
+/// `server.enforceToken` used to make the panel unusable.
+fn is_panel_path(method: &str, path: &str) -> bool {
+    method == "GET" && ["", "/index.html", "/dashboard", "/dashboard/index.html"].contains(&path)
 }
 fn single_frame(frame: Value) -> Response {
     sse_response(futures_util::stream::once(async move {
