@@ -759,7 +759,7 @@
           <span id="bridgeStatusText">Bridge Running</span>
         </div>
         <div class="status-pill" id="tokenBadge" style="display: none;">
-          <input type="password" id="tokenInput" placeholder="Gateway token" autocomplete="off"
+          <input type="password" id="tokenInput" placeholder="Gateway or admin token" autocomplete="off"
                  style="width: 140px; border: 0; background: transparent; color: inherit; font: inherit;" />
           <button class="btn btn-sm" id="tokenApplyBtn">Connect</button>
         </div>
@@ -1313,16 +1313,26 @@
 
 
     // ---- management credential -------------------------------------------------
-    // When the gateway enforces a token (server.enforceToken, or the desktop shell's runtime
-    // token), every management call needs it. The token is kept in memory for this page only:
-    // it is never written to storage, a cookie or the URL, and reloading asks for it again.
+    // When the gateway enforces a token (server.enforceToken, the desktop shell's runtime token, or
+    // a configured server.adminToken guarding the privileged scopes), every management call needs a
+    // credential. One field holds it: the gateway accepts server.token and server.adminToken through
+    // the same x-gateway-token header, and the admin secret carries every scope. The token is kept
+    // in memory for this page only: it is never written to storage, a cookie or the URL, and
+    // reloading asks for it again.
     let gatewayToken = '';
+    // Set while the status line shows a credential prompt, so a failed load does not overwrite the
+    // prompt with the generic "Reconnecting..." text.
+    let authPrompt = '';
 
     function tokenRequired() {
       return !!gatewayToken;
     }
 
-    function showTokenPrompt(message) {
+    // 401 and 403 both mean "not authorised", but they ask for different things: 401 = no usable
+    // credential, 403 = the credential is genuine and lacks the scope this route needs. Once the
+    // owner configures server.adminToken, the inference token that used to open everything no
+    // longer opens the management routes, so retyping it would fail forever without this hint.
+    function showTokenPrompt(message, label) {
       const bar = document.getElementById('tokenBadge');
       if (bar) bar.style.display = '';
       const input = document.getElementById('tokenInput');
@@ -1332,8 +1342,9 @@
         badge.style.borderColor = 'var(--danger)';
         badge.style.color = 'var(--danger)';
       }
+      authPrompt = label || 'Token required';
       const text = document.getElementById('bridgeStatusText');
-      if (text) text.innerText = 'Token required';
+      if (text) text.innerText = authPrompt;
     }
 
     async function apiFetch(url, options) {
@@ -1344,6 +1355,7 @@
       const res = await fetch(url, opts);
       // 401 is a different problem from "gateway unreachable": say which one it is.
       if (res.status === 401) showTokenPrompt('Gateway token');
+      else if (res.status === 403) showTokenPrompt('Admin token (server.adminToken)', 'Admin token required');
       return res;
     }
 
@@ -1369,13 +1381,18 @@
         updatePlaygroundModels();
         loadAccioEdition();
       } catch (err) {
-        document.getElementById('bridgeStatusText').innerText = 'Reconnecting...';
+        // A credential prompt on the status line is a better explanation than "unreachable", and a
+        // 401/403 load fails for that reason; keep it.
+        if (!authPrompt) {
+          document.getElementById('bridgeStatusText').innerText = 'Reconnecting...';
+        }
         document.getElementById('bridgeStatusBadge').style.borderColor = 'var(--danger)';
         document.getElementById('bridgeStatusBadge').style.color = 'var(--danger)';
       }
     }
 
     function renderStatusUI() {
+      authPrompt = '';
       document.getElementById('bridgeStatusText').innerText = 'Bridge Running';
       document.getElementById('bridgeStatusBadge').style.borderColor = 'rgba(16, 185, 129, 0.25)';
       document.getElementById('bridgeStatusBadge').style.color = 'var(--success)';

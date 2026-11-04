@@ -353,6 +353,36 @@ async function main() {
       assert.equal(tokenHeader(requests[requests.length - 1]), TOKEN);
     });
 
+    await check('a 403 asks for the admin token instead of repeating the rejected one', async () => {
+      // Once the owner configures server.adminToken, the inference token no longer opens the
+      // management routes. A panel that kept saying "gateway token" would send the user in circles.
+      control.status = 403;
+      const before = requests.length;
+      $('refreshBtn').click();
+      await waitFor(() => requests.length > before, 'the 403 request');
+      await waitFor(() => badgeVisible(), 'the token bar to become visible for a 403');
+      await waitFor(
+        () => $('bridgeStatusText').innerText === 'Admin token required',
+        'the scope message to stay on the status line',
+      );
+      assert.match($('tokenInput').placeholder, /admin/i, 'the prompt must name the admin token');
+      assert.equal(tokenHeader(requests[requests.length - 1]), TOKEN, 'the rejected request still carried the token');
+
+      // The admin secret arrives through the same field and the same header.
+      control.status = 200;
+      const beforeApply = requests.length;
+      $('tokenApplyBtn').click();
+      await waitFor(() => requests.length > beforeApply, 'the admin-token request');
+      await waitFor(() => $('bridgeStatusText').innerText === 'Bridge Running', 'the recovered status');
+      assert.equal(badgeVisible(), false, 'a 200 response must not show the token bar');
+      assert.equal(tokenHeader(requests[requests.length - 1]), TOKEN);
+    });
+
+    await check('the scope prompt carries the message, never the credential', () => {
+      assert.ok(!$('bridgeStatusText').innerText.includes(TOKEN));
+      assert.ok(!$('tokenInput').placeholder.includes(TOKEN));
+    });
+
     // ---- 4. the token never leaves memory ------------------------------------------------
     await check('the token appears in no URL, cookie, localStorage or sessionStorage entry', () => {
       const haystacks = [
@@ -388,6 +418,7 @@ async function main() {
     'Play/Edit/Delete/toggle dispatch the exact id',
     'no token header before Connect, exact token after',
     '401 shows tokenBadge, 200 keeps it hidden',
+    '403 asks for the admin token, 200 keeps the bar hidden',
     'token absent from URL/cookie/localStorage/sessionStorage',
   ].join('; ');
   console.log(

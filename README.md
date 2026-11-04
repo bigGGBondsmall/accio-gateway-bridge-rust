@@ -39,7 +39,9 @@ cp config.example.json config.json
 4. 确认模型、提供商、默认模型和端口后，用模拟或自有测试模型检查。真实请求可能产生费用，由你决定是否发送。
 5. 若回退，关闭新网关，启动原 Node 版本并使用原配置备份。
 
-桌面生成的 `ACCIO_BRIDGE_TOKEN` 是**仅管理接口和健康检查使用的临时令牌**，不会写入配置。它不阻断 Accio 默认数据请求。保存的 `server.token` / `server.enforceToken` 则用于数据接口认证，两者不是同一凭据。
+桌面生成的 `ACCIO_BRIDGE_TOKEN` 是**本进程的数据面临时令牌**，不会写入配置。它覆盖 `/api/bridge/*` 与健康检查，不阻断 Accio 默认数据请求。保存的 `server.token` / `server.enforceToken` 用于数据接口认证，两者不是同一凭据。
+
+新增可选配置 `server.adminToken`（第二把密钥）。**留空或缺省时行为与旧版完全一致：一个令牌通行全部能力**，升级不需要改动既有 `config.json`，在用的桌面流程不受影响。一旦配置了管理令牌，能力被拆分：inference（生成、官方透传、健康检查）、catalogue（官方模型目录）、management（配置与状态/日志/用量读写）、discovery（本机探测与模型列表探测）、launch（启动本机 Accio 可执行文件）。此时数据面令牌只保留 inference / catalogue，其余范围必须用 `x-gateway-token`（或 `Authorization: Bearer`）传入管理令牌；即使 `server.enforceToken` 为假，管理类范围也强制认证，因为配置第二把密钥本身就是"管理应当受保护"的声明。凭据缺失或无效返回 **401**，凭据有效但缺少该范围返回 **403**（面板据此区分"请输入令牌"与"该令牌缺少管理范围，需要管理令牌"）。两把密钥都不会出现在任何响应体中，`GET /api/bridge/config` 只暴露布尔 `server.hasAdminToken`。
 
 ## 功能矩阵
 
@@ -52,10 +54,10 @@ cp config.example.json config.json
 | 流式输出 | 真实分块转发；SSE 多行/CRLF/CR/UTF-8、Ollama NDJSON 尾帧；客户端断开取消上游；上游因长度/令牌上限或内容过滤中止时返回带该原因的 error（用量保留），不再把半截调用标成 `finishReason: "TOOL_CALLS"` |
 | 错误处理 | 异常/截断流不伪装成功；模型请求不自动重试或转发另一模型，避免重复计费 |
 | 模型/提供商管理 | 增删改（`?id=`、路径式 `DELETE /api/bridge/models/<id>`、`POST /api/bridge/models/delete` 支持 body/query）、分组、默认模型、开关；密钥不回显，省略保留、空串清除 |
-| 管理面板 | 网关自身在 `/`、`/index.html`、`/dashboard`、`/dashboard/` 返回内嵌的管理面板（复用旧版面板，`no-store`）；模型操作改走 `data-model-action` / `data-model-toggle` 属性 + 委托监听，不再把模型 id 拼进内联 `onclick`/`onchange`（含引号的 id 不再弄坏按钮，也无法借 id 注入脚本）；管理调用统一经包装函数附带内存中的 `x-gateway-token`，401 时显示令牌输入条；面板页自身免令牌（`server.enforceToken` 为真时亦然，否则索取令牌的页面会被自己挡住），管理路由仍全部需认证；面板对已存密钥只显示 `hasKey`，编辑时**留空即保留**、输入新值即替换、显式清空才删除 |
+| 管理面板 | 网关自身在 `/`、`/index.html`、`/dashboard`、`/dashboard/` 返回内嵌的管理面板（复用旧版面板，`no-store`）；模型操作改走 `data-model-action` / `data-model-toggle` 属性 + 委托监听，不再把模型 id 拼进内联 `onclick`/`onchange`（含引号的 id 不再弄坏按钮，也无法借 id 注入脚本）；管理调用统一经包装函数附带内存中的 `x-gateway-token`（令牌栏可填 `server.token` 或 `server.adminToken`，服务端两种配置下都接受），401 提示输入令牌、403 提示该令牌缺少管理范围、需要管理令牌；面板页自身免令牌（`server.enforceToken` 为真时亦然，否则索取令牌的页面会被自己挡住），管理路由仍全部需认证；面板对已存密钥只显示 `hasKey`，编辑时**留空即保留**、输入新值即替换、显式清空才删除 |
 | 配置管理 | 白名单字段编辑；保存时拒绝重名（`modelCode` 或别名等于另一个模型的正式 `id` 时报错并点名两个模型；多个提供商共用一个 `upstreamModel` 仍允许）；验证私有副本后原子落盘；运行时管理令牌不持久化 |
 | 日志/用量 | 与 Node 版同形的有界日志（每行 `ts`/`level`/`msg`，另带 `model`；容量 1000 行）、等级/条数过滤；**记录等级可选**（`debug`/`info`/`warn`/`error`，默认 `info`）：启动时用 `ACCIO_BRIDGE_LOG_LEVEL` 或配置 `logging.level`（兼容旧的 `server.logLevel`），运行时用 `GET`/`POST /api/bridge/logging` 切换；低于阈值的行不入环，`debug` 行记录解析后的上游地址、上游状态、工具数、**客户端回填的工具结果名**与透传去向；请求数、错误数、耗时；每套不同的转发工具集记一条诊断日志；`ACCIO_BRIDGE_CAPTURE_DIR` 可选落盘生成请求；不是费用账单/Token 计费系统 |
-| 本地发现 | 显式触发才探测；有界并发/超时/响应体；支持指定提供商查询模型 |
+| 本地发现 | 显式触发才探测；有界并发/超时/响应体；支持指定提供商查询模型；`POST /api/bridge/discover/models` 只探测回环地址或 `server.discoveryAllowedHosts` 列出的主机，其他主机返回 403（拒绝信息只含主机名，不回显 URL 与密钥，避免把保存的 apiKey 送给调用方指定的地址） |
 | Accio 检测/启动 | 读取有限安装元数据与版本证据；启动必须显式调用；未知/非中国版要求确认；测试只使用 fixtures，真实启动未验收 |
 | 官方透传 | 保留方法/状态/原始请求体及查询字节，去除逐跳头；入站 `cookie`/`authorization`/`x-accio-token` 随请求转发（对齐 Node 版），但绝不转发本网关自己的 `x-gateway-token` |
 | Responses / Anthropic 转换 | **未实现**，不会因为参考仓库支持就宣称支持 |
@@ -69,7 +71,9 @@ cp config.example.json config.json
 - 默认仅回环地址；非回环绑定必须配置令牌，所有请求强制认证。外部浏览器 Origin 和不受信 Host 被拒绝。
 - 自定义模型只接收它自身保存的 API key，不接收官方 Cookie、官方 Authorization 或网关令牌；禁用上游重定向。
 - 管理面板页面本身免令牌提供（否则索取令牌的页面会被自己挡住），但每一项管理路由仍要求令牌；面板令牌由包装函数从内存取值附加到 `x-gateway-token`，只存内存，不写入浏览器存储、Cookie、配置或 URL。
-- 官方入站标头按 Node 版语义转发：除逐跳头、重新计算的 `content-length` 与本网关管理令牌 `x-gateway-token` 外全部透传，包含 `cookie` / `authorization` / `x-accio-token`——Accio 的登录态正是这样在 `POST /api/mcp/ali1688/sgcookie` 这类路径上重放的；等于保存的 `server.token` 或运行时令牌的 Bearer 会被过滤，不会当作凭据发给官方上游。
+- 能力分离（`server.adminToken`）：留空时是旧的单令牌模型，一个令牌通行全部能力；配置后数据面令牌只保留 inference / catalogue，management / discovery / launch 必须使用管理令牌（包括 `POST /api/bridge/accio` 与 `POST /api/bridge/accio/launch`——"启动本机可执行文件"不再属于推理凭据）。缺少凭据是 401，凭据有效但范围不足是 403；两把密钥都只经 `x-gateway-token` / `Authorization: Bearer` 传入，从不写入任何响应体、日志行或错误信息。运行时 `ACCIO_BRIDGE_TOKEN` 是数据面令牌，不会因为进程内注入就自动获得管理/启动范围。
+- 模型列表探测（`POST /api/bridge/discover/models`）只允许回环地址或 `server.discoveryAllowedHosts` 列出的主机；其他主机在建立连接前即返回 403。
+- 官方入站标头按 Node 版语义转发：除逐跳头、重新计算的 `content-length` 与本网关管理令牌 `x-gateway-token` 外全部透传，包含 `cookie` / `authorization` / `x-accio-token`——Accio 的登录态正是这样在 `POST /api/mcp/ali1688/sgcookie` 这类路径上重放的；等于保存的 `server.token`、`server.adminToken` 或运行时令牌的 Bearer 会被过滤，不会当作凭据发给官方上游。
 - 查询参数 `token` / `sg_k` 不透传；响应 Cookie 不透传；重定向不跟随。真实可用的认证方式仍以 Accio 自身登录态为准。
 - 修改隐藏密钥的目的地址时必须重新输入或明确清除密钥，避免把旧密钥自动发送给新地址。
 - 请求、解压后体积、单帧、累计工具参数、JSON 响应均设上限。取消和错误计入诊断。

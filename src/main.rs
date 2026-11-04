@@ -56,19 +56,136 @@ fn canonical(path: &str) -> String {
     }
     path.trim_end_matches('/').to_string()
 }
-fn authorize(h: &HeaderMap, c: &Value, management: bool, remote: bool) -> bool {
-    let token = c["server"]["token"].as_str().unwrap_or("");
-    let required = c["server"]["enforceToken"] == true || remote;
-    if !required {
-        return true;
+/// What a route needs from its caller. The gateway used to accept one token for all of this at
+/// once, so the credential the desktop parent injects for plain inference could also rewrite the
+/// configuration, read the log ring (prompts and tool names) and start a local executable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Scope {
+    /// Data plane: generation, the official passthrough and readiness.
+    Inference,
+    /// The official catalogue the Accio client fetches before a turn.
+    Catalogue,
+    /// Configuration edits and every read derived from the configuration.
+    Management,
+    /// Local host probes and the model-relay endpoint.
+    Discovery,
+    /// Inspecting and starting a local Accio executable.
+    Launch,
+}
+impl Scope {
+    fn label(self) -> &'static str {
+        match self {
+            Scope::Inference => "inference",
+            Scope::Catalogue => "catalogue",
+            Scope::Management => "management",
+            Scope::Discovery => "discovery",
+            Scope::Launch => "launch",
+        }
     }
-    if token.is_empty() {
-        return false;
+    /// Capabilities the data-plane credential keeps once a second secret exists: the Accio client
+    /// and the desktop parent drive these without ever holding the admin secret.
+    fn data_plane(self) -> bool {
+        matches!(self, Scope::Inference | Scope::Catalogue)
+    }
+}
+/// Route -> capability table, mirroring the dispatch order of `dispatch`; keep the two in step.
+///
+/// - Inference: `GET /healthz` and `/__bridge/health`; `POST /api/adk/llm`,
+///   `/api/adk/llm/generateContent`, `/api/adk/llm/generateContent/stream` and `/api/bridge/test`;
+///   and every path that is not a gateway route of its own (the transparent passthrough).
+/// - Catalogue: `POST /api/llm/config/v2`.
+/// - Management: `GET /api/bridge/status|config|models|usage|logs|logging|providers`,
+///   `PUT /api/bridge/config`, `POST|DELETE /api/bridge/models`, `POST /api/bridge/models/delete`,
+///   `PATCH|DELETE /api/bridge/models/*`, `POST|PATCH|DELETE /api/bridge/providers*`, and any other
+///   `/api/bridge/*` or `/__bridge/*` operation without an implementation yet (the 501 answer).
+/// - Discovery: `GET /api/bridge/discover`, `POST /api/bridge/discover/models` and
+///   `GET /api/bridge/accio` (it runs tasklist/pgrep and honours `?exePath=`).
+/// - Launch: `POST /api/bridge/accio/launch`.
+fn required_scope(method: &str, path: &str) -> Scope {
+    if path == "/api/bridge/config"
+        || path == "/api/bridge/status"
+        || path == "/api/bridge/usage"
+        || path == "/api/bridge/logs"
+        || path == "/api/bridge/logging"
+        || (path == "/api/bridge/models" && method == "GET")
+        || (path == "/api/bridge/providers" && method == "GET")
+    {
+        return Scope::Management;
+    }
+    if (path.starts_with("/api/bridge/providers") && ["POST", "PATCH", "DELETE"].contains(&method))
+        || (path == "/api/bridge/models" && ["POST", "DELETE"].contains(&method))
+        || (path == "/api/bridge/models/delete" && method == "POST")
+        || (path.starts_with("/api/bridge/models/") && ["PATCH", "DELETE"].contains(&method))
+    {
+        return Scope::Management;
+    }
+    if path == "/api/bridge/accio/launch" && method == "POST" {
+        return Scope::Launch;
+    }
+    if path == "/api/bridge/accio" || path.starts_with("/api/bridge/discover") {
+        return Scope::Discovery;
+    }
+    if path == "/api/llm/config/v2" && method == "POST" {
+        return Scope::Catalogue;
+    }
+    if path == "/healthz" || path == "/__bridge/health" || path == "/api/bridge/test" {
+        return Scope::Inference;
+    }
+    if path.starts_with("/api/bridge/") || path.starts_with("/__bridge/") {
+        // Anything else under the management prefix is either unimplemented (501 in `dispatch`) or
+        // a route whose shape this table has not caught up with: refuse it as management.
+        return Scope::Management;
+    }
+    Scope::Inference
+}
+/// Outcome of a credential check. The two rejections are deliberately different statuses: 401 means
+/// "no usable credential was presented", 403 means "the credential is genuine but this route needs
+/// a capability it does not hold". The panel has to tell them apart, because once an admin token
+/// exists, re-entering the same inference token would fail forever.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Access {
+    Granted,
+    Unauthorized,
+    Forbidden,
+}
+/// Capability check for one request.
+///
+/// `server.token` is the data-plane credential; `server.adminToken` is an optional second secret.
+/// While `adminToken` is empty or absent the model is exactly the single-token model this gateway
+/// has always had - one token, every scope - so an existing configuration and the running desktop
+/// flow behave unchanged. Once an admin token is configured, the data-plane token keeps Inference
+/// and Catalogue only, Management/Discovery/Launch need the admin token, and those privileged
+/// scopes are authenticated even on loopback with `enforceToken` off: configuring a second secret
+/// is the declaration that management is supposed to be privileged. The admin secret is accepted
+/// through the same two headers as the gateway token, so one panel field can hold either.
+fn authorize(h: &HeaderMap, c: &Value, scope: Scope, remote: bool) -> Access {
+    let token = c["server"]["token"].as_str().unwrap_or("");
+    let admin = c["server"]["adminToken"].as_str().unwrap_or("");
+    let separated = !admin.is_empty();
+    let required =
+        c["server"]["enforceToken"] == true || remote || (separated && !scope.data_plane());
+    if !required {
+        return Access::Granted;
+    }
+    if token.is_empty() && !separated {
+        return Access::Unauthorized;
     }
     let candidate = header(h, "x-gateway-token");
     let bearer = bearer_token(header(h, "authorization"));
-    let _ = management;
-    constant_equal(token, candidate) || constant_equal(token, bearer)
+    if candidate.is_empty() && bearer.is_empty() {
+        return Access::Unauthorized;
+    }
+    if separated && (constant_equal(admin, candidate) || constant_equal(admin, bearer)) {
+        return Access::Granted;
+    }
+    if !token.is_empty() && (constant_equal(token, candidate) || constant_equal(token, bearer)) {
+        return if !separated || scope.data_plane() {
+            Access::Granted
+        } else {
+            Access::Forbidden
+        };
+    }
+    Access::Unauthorized
 }
 fn constant_equal(a: &str, b: &str) -> bool {
     let mut diff = a.len() ^ b.len();
@@ -168,7 +285,7 @@ fn decode(bytes: &[u8], encoding: &str, max: usize) -> Result<Value, String> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("Accio Gateway Bridge Rust {}\nUsage: accio-gateway-bridge-rust [--config PATH] [--host IP] [--port PORT]\nACCIO_BRIDGE_CONFIG: config path; ACCIO_BRIDGE_TOKEN: ephemeral management-only token.\nDefaults to loopback:8080. Port 0 selects a free port and prints JSON readiness.\nA missing config starts with safe empty defaults; model/config edits create it.\n--version prints version. No credential discovery or model calls at startup.",env!("CARGO_PKG_VERSION"));
+        println!("Accio Gateway Bridge Rust {}\nUsage: accio-gateway-bridge-rust [--config PATH] [--host IP] [--port PORT]\nACCIO_BRIDGE_CONFIG: config path; ACCIO_BRIDGE_TOKEN: ephemeral data-plane token (management only while server.adminToken is unset).\nDefaults to loopback:8080. Port 0 selects a free port and prints JSON readiness.\nA missing config starts with safe empty defaults; model/config edits create it.\n--version prints version. No credential discovery or model calls at startup.",env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     if args.iter().any(|a| a == "--version") {
@@ -279,7 +396,11 @@ async fn handle(
             cfg["server"]["enforceToken"] = json!(true);
         }
     }
-    let management = path.starts_with("/api/bridge/");
+    // The desktop parent's ephemeral token becomes this process' data-plane credential: it covers
+    // /api/bridge/* and the health check. Once `server.adminToken` is configured it no longer
+    // reaches the management, discovery or launch scopes, so a shell that needs those has to be
+    // given the admin secret instead of assuming the token it injected is enough.
+    let scope = required_scope(req.method().as_str(), &path);
     let method = req.method().clone();
     let panel = is_panel_path(method.as_str(), &path);
     let headers = req.headers().clone();
@@ -308,17 +429,28 @@ async fn handle(
         }
     }
     // The panel itself is static HTML with no secrets; it stays reachable so the page can ask for
-    // the token. Every management route below it is still gated.
-    if !panel
-        && !authorize(
+    // the token. Every other route needs the capability from the table above. The check happens
+    // here rather than inside `dispatch`, so a rejected request never reads its body first.
+    if !panel {
+        match authorize(
             &headers,
             &cfg,
-            management,
+            scope,
             !peer.ip().is_loopback()
                 || !config::is_loopback(cfg["server"]["host"].as_str().unwrap_or("")),
-        )
-    {
-        return error(401, "invalid gateway token");
+        ) {
+            Access::Granted => {}
+            Access::Unauthorized => return error(401, "invalid gateway token"),
+            Access::Forbidden => {
+                return error(
+                    403,
+                    &format!(
+                        "gateway token accepted but it lacks the {} scope; send the admin token (server.adminToken) for this route",
+                        scope.label()
+                    ),
+                )
+            }
+        }
     }
     let max = cfg["server"]["maxBodyBytes"].as_u64().unwrap_or(26214400) as usize;
     let bytes = match to_bytes(req.into_body(), max).await {
@@ -824,20 +956,23 @@ fn official_request(
         request = request.header(key, value);
     }
     // A configured upstream key owns authorization; otherwise relay Accio's own credential, but
-    // never one that is really this gateway's token.
+    // never one that is really this gateway's data-plane token, its admin secret or the ephemeral
+    // token: relaying any of them would hand the upstream a local management credential.
     let upstream_key = cfg["upstream"]["apiKey"].as_str().unwrap_or("");
     if !upstream_key.is_empty() {
         request = request.bearer_auth(upstream_key);
     } else {
         let incoming = header(headers, "authorization");
         let gateway = cfg["server"]["token"].as_str().unwrap_or("");
+        let admin = cfg["server"]["adminToken"].as_str().unwrap_or("");
         let credential = bearer_token(incoming);
         let gateway_match = !gateway.is_empty() && constant_equal(credential, gateway);
+        let admin_match = !admin.is_empty() && constant_equal(credential, admin);
         let runtime_match = app
             .runtime_token
             .as_deref()
             .is_some_and(|t| constant_equal(credential, t));
-        if !incoming.is_empty() && !gateway_match && !runtime_match {
+        if !incoming.is_empty() && !gateway_match && !admin_match && !runtime_match {
             request = request.header("authorization", incoming);
         }
     }
@@ -1335,8 +1470,25 @@ where
         .unwrap()
 }
 
+/// The configuration as a response body may carry it. Neither secret is serialised: `server.token`
+/// and `server.adminToken` never appear here (or in any other payload), only the fact that a
+/// second secret exists, which the panel uses to word its token prompt.
 fn safe_config(c: &Value) -> Value {
-    json!({"server":{"maxBodyBytes":c["server"]["maxBodyBytes"],"cors":c["server"]["cors"]},"upstream":{"baseUrl":c["upstream"]["baseUrl"],"timeoutMs":c["upstream"]["timeoutMs"]},"catalog":{"enabled":c["catalog"]["enabled"],"fetchOfficial":c["catalog"]["fetchOfficial"],"providerName":c["catalog"]["providerName"],"providerDisplayName":c["catalog"]["providerDisplayName"],"timeoutMs":c["catalog"]["timeoutMs"]}})
+    json!({
+        "server": {
+            "maxBodyBytes": c["server"]["maxBodyBytes"],
+            "cors": c["server"]["cors"],
+            "hasAdminToken": !c["server"]["adminToken"].as_str().unwrap_or("").is_empty()
+        },
+        "upstream": {"baseUrl": c["upstream"]["baseUrl"], "timeoutMs": c["upstream"]["timeoutMs"]},
+        "catalog": {
+            "enabled": c["catalog"]["enabled"],
+            "fetchOfficial": c["catalog"]["fetchOfficial"],
+            "providerName": c["catalog"]["providerName"],
+            "providerDisplayName": c["catalog"]["providerDisplayName"],
+            "timeoutMs": c["catalog"]["timeoutMs"]
+        }
+    })
 }
 
 async fn official_catalog(
@@ -1407,6 +1559,7 @@ fn bearer_token(value: &str) -> &str {
 #[cfg(test)]
 mod route_tests {
     use super::canonical;
+    use super::{Access, Scope};
     use serde_json::json;
 
     #[test]
@@ -1436,6 +1589,9 @@ mod route_tests {
         assert!(html.contains("apiFetch"));
         assert!(html.contains("tokenBadge"));
         assert!(html.contains("x-gateway-token"));
+        // The panel has to tell a 401 (no credential) from a 403 (a credential without the scope),
+        // because after an admin token exists the inference token cannot open management routes.
+        assert!(html.contains("Admin token required"));
     }
     #[test]
     fn the_panel_is_served_without_a_token_but_everything_else_is_not() {
@@ -1562,6 +1718,538 @@ mod route_tests {
         assert_eq!(
             canonical("/__bridge/accio/unknown"),
             "/__bridge/accio/unknown"
+        );
+    }
+    // ---- capability model ------------------------------------------------------------------
+    fn headers(pairs: &[(&str, &str)]) -> axum::http::HeaderMap {
+        let mut map = axum::http::HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(
+                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                axum::http::HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        map
+    }
+    /// `token` is the data-plane credential and `admin` the optional second secret. `enforceToken`
+    /// is on, which is the deployment the split exists for.
+    fn credentials(token: &str, admin: &str) -> serde_json::Value {
+        let mut c = crate::config::defaults();
+        c["server"]["token"] = json!(token);
+        c["server"]["adminToken"] = json!(admin);
+        c["server"]["enforceToken"] = json!(true);
+        // Mutations must not touch the disk while a test runs.
+        c["disableDiskSave"] = json!(true);
+        crate::config::normalize(c).unwrap()
+    }
+    fn test_app(cfg: serde_json::Value, runtime_token: Option<&str>) -> super::App {
+        super::App {
+            config: std::sync::Arc::new(super::RwLock::new(cfg)),
+            path: std::sync::Arc::new(std::path::PathBuf::from("unused-test-config.json")),
+            client: reqwest::Client::new(),
+            runtime_token: runtime_token.map(str::to_string),
+            telemetry: Default::default(),
+            catalog_cache: Default::default(),
+            last_tools: Default::default(),
+        }
+    }
+    fn request(
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: &str,
+    ) -> axum::extract::Request {
+        let mut builder = axum::http::Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "127.0.0.1:8080")
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            builder = builder.header("x-gateway-token", token);
+        }
+        builder
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap()
+    }
+    /// One request through the real `handle` entry point, from a loopback peer.
+    async fn call(
+        app: &super::App,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: &str,
+    ) -> (axum::http::StatusCode, String) {
+        let response = super::handle(
+            axum::extract::State(app.clone()),
+            axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 41234))),
+            request(method, path, token, body),
+        )
+        .await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+    #[test]
+    fn one_token_configuration_still_holds_every_scope() {
+        let c = credentials("inference-secret", "");
+        let token = headers(&[("x-gateway-token", "inference-secret")]);
+        let bearer = headers(&[("authorization", "Bearer inference-secret")]);
+        for scope in [
+            Scope::Inference,
+            Scope::Catalogue,
+            Scope::Management,
+            Scope::Discovery,
+            Scope::Launch,
+        ] {
+            assert_eq!(
+                super::authorize(&token, &c, scope, false),
+                Access::Granted,
+                "{}",
+                scope.label()
+            );
+            assert_eq!(
+                super::authorize(&bearer, &c, scope, false),
+                Access::Granted,
+                "{}",
+                scope.label()
+            );
+        }
+        // A missing or wrong credential is refused exactly as before.
+        assert_eq!(
+            super::authorize(&headers(&[]), &c, Scope::Management, false),
+            Access::Unauthorized
+        );
+        assert_eq!(
+            super::authorize(
+                &headers(&[("x-gateway-token", "wrong")]),
+                &c,
+                Scope::Management,
+                false
+            ),
+            Access::Unauthorized
+        );
+    }
+    #[test]
+    fn a_second_secret_takes_the_privileged_scopes_from_the_inference_token() {
+        let c = credentials("inference-secret", "admin-secret");
+        let inference = headers(&[("x-gateway-token", "inference-secret")]);
+        assert_eq!(
+            super::authorize(&inference, &c, Scope::Inference, false),
+            Access::Granted
+        );
+        assert_eq!(
+            super::authorize(&inference, &c, Scope::Catalogue, false),
+            Access::Granted
+        );
+        for scope in [Scope::Management, Scope::Discovery, Scope::Launch] {
+            assert_eq!(
+                super::authorize(&inference, &c, scope, false),
+                Access::Forbidden,
+                "{}",
+                scope.label()
+            );
+        }
+        for admin in [
+            headers(&[("x-gateway-token", "admin-secret")]),
+            headers(&[("authorization", "Bearer admin-secret")]),
+        ] {
+            for scope in [
+                Scope::Inference,
+                Scope::Catalogue,
+                Scope::Management,
+                Scope::Discovery,
+                Scope::Launch,
+            ] {
+                assert_eq!(
+                    super::authorize(&admin, &c, scope, false),
+                    Access::Granted,
+                    "{}",
+                    scope.label()
+                );
+            }
+        }
+        // Configuring the second secret is what makes the privileged scopes privileged: they are
+        // authenticated even on loopback with `enforceToken` off, while the data plane stays open.
+        let mut relaxed = c.clone();
+        relaxed["server"]["enforceToken"] = json!(false);
+        assert_eq!(
+            super::authorize(&headers(&[]), &relaxed, Scope::Inference, false),
+            Access::Granted
+        );
+        assert_eq!(
+            super::authorize(&headers(&[]), &relaxed, Scope::Management, false),
+            Access::Unauthorized
+        );
+        assert_eq!(
+            super::authorize(&inference, &relaxed, Scope::Management, false),
+            Access::Forbidden
+        );
+        // ... and with no admin token there is nothing to separate, so nothing is newly required.
+        let mut single = credentials("inference-secret", "");
+        single["server"]["enforceToken"] = json!(false);
+        assert_eq!(
+            super::authorize(&headers(&[]), &single, Scope::Launch, false),
+            Access::Granted
+        );
+    }
+    #[test]
+    fn routes_are_grouped_by_the_capability_they_need() {
+        for path in [
+            "/api/bridge/status",
+            "/api/bridge/config",
+            "/api/bridge/models",
+            "/api/bridge/usage",
+            "/api/bridge/logs",
+            "/api/bridge/providers",
+        ] {
+            assert_eq!(
+                super::required_scope("GET", path),
+                Scope::Management,
+                "GET {path}"
+            );
+        }
+        for (method, path) in [
+            ("PUT", "/api/bridge/config"),
+            ("POST", "/api/bridge/models"),
+            ("DELETE", "/api/bridge/models"),
+            ("POST", "/api/bridge/models/delete"),
+            ("PATCH", "/api/bridge/models/one"),
+            ("DELETE", "/api/bridge/models/one"),
+            ("POST", "/api/bridge/providers"),
+            ("PATCH", "/api/bridge/providers/p_1"),
+            ("DELETE", "/api/bridge/providers/p_1"),
+            ("POST", "/api/bridge/logging"),
+            ("GET", "/api/bridge/from-the-future"),
+            ("GET", "/__bridge/unknown"),
+        ] {
+            assert_eq!(
+                super::required_scope(method, path),
+                Scope::Management,
+                "{method} {path}"
+            );
+        }
+        for path in [
+            "/api/bridge/discover",
+            "/api/bridge/discover/models",
+            "/api/bridge/accio",
+        ] {
+            assert_eq!(
+                super::required_scope("GET", path),
+                Scope::Discovery,
+                "{path}"
+            );
+        }
+        assert_eq!(
+            super::required_scope("POST", "/api/bridge/accio/launch"),
+            Scope::Launch
+        );
+        for path in [
+            "/healthz",
+            "/__bridge/health",
+            "/api/adk/llm",
+            "/api/adk/llm/generateContent",
+            "/api/bridge/test",
+            "/api/mcp/ali1688/sgcookie",
+        ] {
+            assert_eq!(
+                super::required_scope("POST", path),
+                Scope::Inference,
+                "{path}"
+            );
+        }
+        assert_eq!(super::required_scope("GET", "/healthz"), Scope::Inference);
+        assert_eq!(
+            super::required_scope("GET", "/__bridge/health"),
+            Scope::Inference
+        );
+        assert_eq!(
+            super::required_scope("POST", "/api/llm/config/v2"),
+            Scope::Catalogue
+        );
+    }
+    #[tokio::test]
+    async fn a_second_secret_splits_the_management_plane_off_the_data_plane() {
+        use axum::http::StatusCode;
+        let app = test_app(credentials("inference-secret", "admin-secret"), None);
+        // The inference credential still drives the data plane...
+        assert_eq!(
+            call(&app, "GET", "/healthz", Some("inference-secret"), "")
+                .await
+                .0,
+            StatusCode::OK
+        );
+        // ...but no longer the management plane. The refusal is a 403 and not a 401: the caller is
+        // authenticated, it simply lacks the scope, and the panel words its prompt on that.
+        for path in [
+            "/api/bridge/status",
+            "/api/bridge/config",
+            "/api/bridge/models",
+            "/api/bridge/logs",
+            "/api/bridge/usage",
+            "/api/bridge/providers",
+            "/api/bridge/logging",
+        ] {
+            assert_eq!(
+                call(&app, "GET", path, Some("inference-secret"), "")
+                    .await
+                    .0,
+                StatusCode::FORBIDDEN,
+                "GET {path}"
+            );
+        }
+        for (method, path) in [
+            ("PUT", "/api/bridge/config"),
+            ("POST", "/api/bridge/models"),
+            ("PATCH", "/api/bridge/models/one"),
+            ("DELETE", "/api/bridge/models?id=one"),
+        ] {
+            assert_eq!(
+                call(&app, method, path, Some("inference-secret"), "")
+                    .await
+                    .0,
+                StatusCode::FORBIDDEN,
+                "{method} {path}"
+            );
+        }
+        // Discovery and launch are capabilities of their own; the empty launch body proves the
+        // request never reaches the launcher.
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                "/api/bridge/discover",
+                Some("inference-secret"),
+                ""
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                "/api/bridge/accio",
+                Some("inference-secret"),
+                ""
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/api/bridge/accio/launch",
+                Some("inference-secret"),
+                ""
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        // No credential at all is a 401, so the two rejections stay distinguishable.
+        assert_eq!(
+            call(&app, "GET", "/api/bridge/status", None, "").await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(&app, "POST", "/api/bridge/accio/launch", None, "")
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        // The admin secret opens every one of them.
+        assert_eq!(
+            call(&app, "GET", "/api/bridge/status", Some("admin-secret"), "")
+                .await
+                .0,
+            StatusCode::OK
+        );
+        // The panel page keeps being served to a caller without any credential.
+        let (status, body) = call(&app, "GET", "/dashboard", None, "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("Accio Gateway Bridge"));
+    }
+    #[tokio::test]
+    async fn the_single_token_and_ephemeral_desktop_flows_behave_as_before() {
+        use axum::http::StatusCode;
+        let app = test_app(credentials("inference-secret", ""), None);
+        for path in [
+            "/api/bridge/status",
+            "/api/bridge/config",
+            "/api/bridge/models",
+            "/api/bridge/logs",
+            "/api/bridge/usage",
+            "/api/bridge/providers",
+            "/api/bridge/logging",
+        ] {
+            assert_eq!(
+                call(&app, "GET", path, Some("inference-secret"), "")
+                    .await
+                    .0,
+                StatusCode::OK,
+                "GET {path}"
+            );
+        }
+        // The launch route is reached (its empty body is a 400), i.e. the only credential still
+        // holds the launch scope.
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/api/bridge/accio/launch",
+                Some("inference-secret"),
+                ""
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        // `ACCIO_BRIDGE_TOKEN` replaces the saved token for the management paths, exactly as the
+        // desktop shell relies on.
+        let runtime = test_app(credentials("inference-secret", ""), Some("runtime-secret"));
+        assert_eq!(
+            call(
+                &runtime,
+                "GET",
+                "/api/bridge/status",
+                Some("runtime-secret"),
+                ""
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(
+                &runtime,
+                "GET",
+                "/api/bridge/status",
+                Some("inference-secret"),
+                ""
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        // Once an admin token exists, the ephemeral token keeps the data plane (health check,
+        // inference) and loses management/discovery/launch: it does not silently gain privileges,
+        // and a shell that needs them sends the admin secret instead.
+        let split = test_app(
+            credentials("inference-secret", "admin-secret"),
+            Some("runtime-secret"),
+        );
+        assert_eq!(
+            call(&split, "GET", "/healthz", Some("runtime-secret"), "")
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(
+                &split,
+                "GET",
+                "/api/bridge/status",
+                Some("runtime-secret"),
+                ""
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            call(
+                &split,
+                "GET",
+                "/api/bridge/status",
+                Some("admin-secret"),
+                ""
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+    }
+    #[tokio::test]
+    async fn no_response_body_ever_carries_a_configured_secret() {
+        use axum::http::StatusCode;
+        let cfg = credentials("inference-secret", "admin-secret");
+        let app = test_app(cfg.clone(), Some("runtime-secret"));
+        let safe = super::safe_config(&cfg).to_string();
+        assert_eq!(
+            super::safe_config(&cfg)["server"]["hasAdminToken"],
+            json!(true),
+            "the panel may learn that a second secret exists"
+        );
+        for secret in ["admin-secret", "inference-secret", "runtime-secret"] {
+            assert!(!safe.contains(secret), "safe_config exposed {secret}");
+        }
+        for (method, path, body) in [
+            ("GET", "/healthz", ""),
+            ("GET", "/api/bridge/status", ""),
+            ("GET", "/api/bridge/config", ""),
+            ("GET", "/api/bridge/models", ""),
+            ("GET", "/api/bridge/providers", ""),
+            ("GET", "/api/bridge/usage", ""),
+            ("GET", "/api/bridge/logs", ""),
+            ("GET", "/api/bridge/logging", ""),
+            ("GET", "/", ""),
+            (
+                "POST",
+                "/api/bridge/models",
+                r#"{"id":"leak","provider":"openai","baseUrl":"http://127.0.0.1:9/v1","apiKey":"model-secret"}"#,
+            ),
+        ] {
+            let (status, text) = call(&app, method, path, Some("admin-secret"), body).await;
+            assert_eq!(status, StatusCode::OK, "{method} {path}: {text}");
+            for secret in [
+                "admin-secret",
+                "inference-secret",
+                "runtime-secret",
+                "model-secret",
+            ] {
+                assert!(
+                    !text.contains(secret),
+                    "{method} {path} echoed {secret}: {text}"
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn the_model_relay_refuses_a_host_the_owner_did_not_allow() {
+        use axum::http::StatusCode;
+        let app = test_app(credentials("inference-secret", "admin-secret"), None);
+        // An external host, with a caller-supplied key in the body: refused before any socket is
+        // opened, and the refusal names the host, never the URL or the key.
+        let (status, text) = call(
+            &app,
+            "POST",
+            "/api/bridge/discover/models",
+            Some("admin-secret"),
+            r#"{"baseUrl":"http://example.com:9999/v1","apiKey":"relayed-secret"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+        assert!(text.contains("server.discoveryAllowedHosts"), "{text}");
+        assert!(!text.contains("relayed-secret"), "{text}");
+        assert!(!text.contains("example.com:9999/v1"), "{text}");
+        // A loopback host is still probed, so the panel's local detection keeps working.
+        let (status, text) = call(
+            &app,
+            "POST",
+            "/api/bridge/discover/models",
+            Some("admin-secret"),
+            r#"{"baseUrl":"http://127.0.0.1:9/v1"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert!(
+            !text.contains("discoveryAllowedHosts"),
+            "a loopback probe must not be refused by the host gate: {text}"
         );
     }
 }
