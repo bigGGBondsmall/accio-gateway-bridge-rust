@@ -643,7 +643,7 @@ fn reason(reason: Option<&str>) -> &'static str {
         _ => "STOP",
     }
 }
-fn usage(value: &Value) -> Value {
+pub fn usage(value: &Value) -> Value {
     let prompt = number(first(&[
         &value["prompt_tokens"],
         &value["promptTokenCount"],
@@ -695,7 +695,30 @@ fn call_args(value: &Value) -> (Value, String) {
 pub fn thought_frame(text: &str) -> Value {
     json!({"content":{"role":"model","parts":[{"text":text,"thought":true}]},"turnComplete":false})
 }
-pub fn calls_frame(calls: Vec<Value>) -> Value {
+/// Upstream finish reasons that mean "stopped by a limit", not "finished the call".
+fn stopped_by_limit(finish: &str) -> bool {
+    matches!(
+        finish.to_ascii_lowercase().as_str(),
+        "length" | "max_tokens" | "max_output_tokens" | "content_filter" | "content-filter"
+    )
+}
+
+/// Why accumulated tool calls must not be handed to the client as runnable calls.
+///
+/// `Some(reason)` means the upstream was cut short by a token/length limit or a content filter, so
+/// whatever calls it had emitted may be half-written; delivering those would let a client run a
+/// call the model never finished. Argument text that is complete but malformed is deliberately
+/// *not* a reason to fail here: it is passed through verbatim so the client can raise its own
+/// argument-parse error, which is the long-standing behaviour this gateway matches.
+pub fn tool_calls_incomplete(finish: Option<&str>) -> Option<String> {
+    let reason = finish?;
+    stopped_by_limit(reason)
+        .then(|| format!("upstream stopped with {reason} before the tool call finished"))
+}
+
+/// Build the tool-call frame. `tokens` carries the upstream usage through, so a turn that calls
+/// tools reports the same accounting as a turn that only writes text.
+pub fn calls_frame(calls: Vec<Value>, tokens: Option<Value>) -> Value {
     let parts: Vec<Value> = calls
         .into_iter()
         .map(|c| {
@@ -707,7 +730,13 @@ pub fn calls_frame(calls: Vec<Value>) -> Value {
             json!({"functionCall":call})
         })
         .collect();
-    json!({"content":{"role":"model","parts":parts},"turnComplete":true,"finishReason":"TOOL_CALLS"})
+    let mut out = json!({"content":{"role":"model","parts":parts},"turnComplete":true,"finishReason":"TOOL_CALLS"});
+    if let Some(v) = tokens {
+        if v.is_object() {
+            out["usageMetadata"] = usage(&v);
+        }
+    }
+    out
 }
 pub fn response(body: &Value, ollama: bool) -> Result<Value, String> {
     if !body["error"].is_null() {
@@ -752,16 +781,30 @@ pub fn response(body: &Value, ollama: bool) -> Result<Value, String> {
         }
     }
     if let Some(calls) = message["tool_calls"].as_array() {
-        for c in calls {
-            let (args, args_json) = call_args(&c["function"]["arguments"]);
-            let mut call = json!({"name":c["function"]["name"],"args":args,"argsJson":args_json});
-            if !c["id"].is_null() {
-                call["id"] = c["id"].clone();
+        let prepared: Vec<Value> = calls
+            .iter()
+            .map(|c| {
+                let (args, args_json) = call_args(&c["function"]["arguments"]);
+                json!({"name":c["function"]["name"],"args":args,"argsJson":args_json,"id":c["id"]})
+            })
+            .collect();
+        // A tool call the upstream never finished writing must not be presented as runnable.
+        if !prepared.is_empty() {
+            if let Some(problem) = tool_calls_incomplete(finish) {
+                return Err(problem);
             }
-            parts.push(json!({"functionCall":call}));
-        }
-        if !calls.is_empty() {
             out["finishReason"] = json!("TOOL_CALLS");
+        }
+        for call in prepared {
+            let mut call = call;
+            let id = call["id"].take();
+            call.as_object_mut().unwrap().remove("id");
+            let mut delivered =
+                json!({"name":call["name"],"args":call["args"],"argsJson":call["argsJson"]});
+            if !id.is_null() {
+                delivered["id"] = id;
+            }
+            parts.push(json!({"functionCall":delivered}));
         }
     }
     if parts.is_empty() {
@@ -954,7 +997,7 @@ mod adk_0372_tests {
     #[test]
     fn malformed_args_keep_raw_output_but_not_invalid_history() {
         for raw in ["{bad", "[]", "1"] {
-            let f = calls_frame(vec![json!({"id":"a","name":"x","args":raw})]);
+            let f = calls_frame(vec![json!({"id":"a","name":"x","args":raw})], None);
             assert_eq!(f["content"]["parts"][0]["functionCall"]["args"], json!({}));
             assert_eq!(f["content"]["parts"][0]["functionCall"]["argsJson"], raw);
         }
@@ -963,6 +1006,54 @@ mod adk_0372_tests {
             p["messages"][0]["tool_calls"][0]["function"]["arguments"],
             "{}"
         );
+    }
+    #[test]
+    fn tool_call_frames_carry_usage_and_refuse_unfinished_calls() {
+        let usage = json!({"prompt_tokens":11,"completion_tokens":7});
+        let complete = vec![json!({"id":"a","name":"read","args":"{\"path\":\"a.txt\"}"})];
+        assert_eq!(tool_calls_incomplete(Some("tool_calls")), None);
+        // Some providers report plain "stop" while still returning a usable tool call.
+        assert_eq!(tool_calls_incomplete(Some("stop")), None);
+        assert_eq!(tool_calls_incomplete(None), None);
+        assert!(tool_calls_incomplete(Some("length"))
+            .unwrap()
+            .contains("length"));
+        assert!(tool_calls_incomplete(Some("max_tokens"))
+            .unwrap()
+            .contains("max_tokens"));
+        assert!(tool_calls_incomplete(Some("content_filter"))
+            .unwrap()
+            .contains("content_filter"));
+        let malformed = calls_frame(vec![json!({"name":"read","args":"{bad"})], None);
+        assert_eq!(malformed["finishReason"], "TOOL_CALLS");
+        assert_eq!(
+            malformed["content"]["parts"][0]["functionCall"]["argsJson"],
+            "{bad"
+        );
+
+        let frame = calls_frame(complete.clone(), Some(usage));
+        assert_eq!(frame["finishReason"], "TOOL_CALLS");
+        assert_eq!(frame["usageMetadata"]["totalTokenCount"], json!(18));
+        assert_eq!(frame["usageMetadata"]["promptTokenCount"], json!(11));
+        assert_eq!(calls_frame(complete, None).get("usageMetadata"), None);
+    }
+    #[test]
+    fn a_limited_finish_reason_turns_tool_calls_into_a_failure() {
+        // Non-stream: the upstream said it stopped for length, so the call must not be delivered.
+        let error = response(
+            &json!({"choices":[{"finish_reason":"length","message":{"tool_calls":[{"id":"a","function":{"name":"read","arguments":"{\"path\":\"a.tx"}}]},"usage":{"prompt_tokens":3,"completion_tokens":4}}]}),
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("length"), "{error}");
+        // A normal tool_calls finish still delivers, and keeps its usage.
+        let ok = response(
+            &json!({"choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"a","function":{"name":"read","arguments":"{\"path\":\"a.txt\"}"}}]}}],"usage":{"prompt_tokens":3,"completion_tokens":4}}),
+            false,
+        )
+        .unwrap();
+        assert_eq!(ok["finishReason"], "TOOL_CALLS");
+        assert_eq!(ok["usageMetadata"]["totalTokenCount"], json!(7));
     }
     #[test]
     fn reasoning_nonstream_is_a_thought_part() {

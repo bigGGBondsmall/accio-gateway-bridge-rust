@@ -274,6 +274,7 @@ async fn handle(
         }
     }
     let management = path.starts_with("/api/bridge/");
+    let panel = is_panel_path(&path);
     let method = req.method().clone();
     let headers = req.headers().clone();
     let uri = req.uri().clone();
@@ -300,13 +301,17 @@ async fn handle(
             return r;
         }
     }
-    if !authorize(
-        &headers,
-        &cfg,
-        management,
-        !peer.ip().is_loopback()
-            || !config::is_loopback(cfg["server"]["host"].as_str().unwrap_or("")),
-    ) {
+    // The panel itself is static HTML with no secrets; it stays reachable so the page can ask for
+    // the token. Every management route below it is still gated.
+    if !panel
+        && !authorize(
+            &headers,
+            &cfg,
+            management,
+            !peer.ip().is_loopback()
+                || !config::is_loopback(cfg["server"]["host"].as_str().unwrap_or("")),
+        )
+    {
         return error(401, "invalid gateway token");
     }
     let max = cfg["server"]["maxBodyBytes"].as_u64().unwrap_or(26214400) as usize;
@@ -327,6 +332,84 @@ async fn handle(
     }
     response
 }
+/// How a requested model name resolves against the configured models.
+enum RouteOutcome<'a> {
+    Found(&'a Value, Option<String>),
+    Disabled(String),
+    Unknown,
+}
+
+/// Resolve `requested` to a configured model.
+///
+/// Matching happens in tiers: a formal `id` always wins over a `modelCode`, which wins over an
+/// alias, which wins over an `upstreamModel`. The previous first-match-wins scan over every name
+/// at once let an earlier model's alias (or upstream name) shadow a later model's real id, so a
+/// request could be forwarded to a different provider than the one the caller named.
+fn route_model<'a>(models: &'a [Value], requested: &str) -> RouteOutcome<'a> {
+    if requested.trim().is_empty() {
+        return RouteOutcome::Unknown;
+    }
+    let same = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.eq_ignore_ascii_case(requested))
+    };
+    let matches_name = |m: &Value| {
+        same(m.get("id"))
+            || same(m.get("modelCode"))
+            || same(m.get("upstreamModel"))
+            || m["aliases"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|s| same(Some(s))))
+    };
+    let mut saw_disabled = None;
+    for tier in ["id", "modelCode", "aliases", "upstreamModel"] {
+        let hits: Vec<&Value> = models
+            .iter()
+            .filter(|m| match tier {
+                "id" => same(m.get("id")),
+                "modelCode" => same(m.get("modelCode")),
+                "aliases" => m["aliases"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|s| same(Some(s)))),
+                _ => same(m.get("upstreamModel")),
+            })
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        let enabled: Vec<&Value> = hits
+            .iter()
+            .copied()
+            .filter(|m| m["enabled"] != false)
+            .collect();
+        if enabled.is_empty() {
+            saw_disabled = Some(hits[0]["id"].as_str().unwrap_or(requested).to_string());
+            continue;
+        }
+        // Say so when another enabled model also answers to this name, so an ambiguous
+        // configuration is visible in the log instead of only showing up as a wrong provider.
+        let winner = enabled[0]["id"].as_str().unwrap_or("?");
+        let others: Vec<String> = models
+            .iter()
+            .filter(|m| m["enabled"] != false)
+            .filter(|m| m["id"].as_str() != enabled[0]["id"].as_str())
+            .filter(|m| matches_name(m))
+            .map(|m| m["id"].as_str().unwrap_or("?").to_string())
+            .collect();
+        let note = (!others.is_empty()).then(|| {
+            format!(
+                "model name {requested} also matches {}; routing to {winner} by {tier}",
+                others.join(", ")
+            )
+        });
+        return RouteOutcome::Found(enabled[0], note);
+    }
+    match saw_disabled {
+        Some(id) => RouteOutcome::Disabled(id),
+        None => RouteOutcome::Unknown,
+    }
+}
 #[allow(clippy::too_many_arguments)] // Explicit request metadata avoids retaining a consumed HTTP body.
 async fn dispatch(
     app: &App,
@@ -343,8 +426,7 @@ async fn dispatch(
     // The management panel is served by the gateway itself, on the same paths the older build
     // used, so the URL people already had keeps working. `canonical()` reduces a trailing slash
     // to nothing, which makes "/" an empty string and "/dashboard/" a plain "/dashboard".
-    if method == "GET" && ["", "/index.html", "/dashboard", "/dashboard/index.html"].contains(&path)
-    {
+    if is_panel_path(path) {
         return panel_response();
     }
     if method == "GET" && (path == "/healthz" || path == "/__bridge/health") {
@@ -570,26 +652,33 @@ async fn dispatch(
                 .to_string();
             body["contents"] = json!([{"role":"user","parts":[{"text":prompt}]}]);
         }
-        let requested = body["model"].as_str().unwrap_or("");
-        let selected = models.iter().find(|m| {
-            m["enabled"] != false
-                && ["id", "modelCode", "upstreamModel"].iter().any(|k| {
-                    m[k].as_str()
-                        .is_some_and(|s| s.eq_ignore_ascii_case(requested))
-                })
-                || m["enabled"] != false
-                    && m["aliases"].as_array().is_some_and(|a| {
-                        a.iter().any(|s| {
-                            s.as_str()
-                                .is_some_and(|s| s.eq_ignore_ascii_case(requested))
-                        })
-                    })
-        });
-        if let Some(model) = selected {
-            return generate(app, cfg, model, &body).await;
-        }
-        if path == "/api/bridge/test" {
-            return error(404, "custom model not found");
+        match route_model(models, body["model"].as_str().unwrap_or("")) {
+            RouteOutcome::Found(model, note) => {
+                if let Some(note) = note {
+                    telemetry::log(&app.telemetry, "warn", &note);
+                }
+                return generate(app, cfg, model, &body).await;
+            }
+            // A registered model that is switched off is not an unknown upstream model: say so
+            // instead of forwarding the request to the official gateway as if nothing matched.
+            RouteOutcome::Disabled(id) => {
+                telemetry::log(
+                    &app.telemetry,
+                    "warn",
+                    &format!("model {id} is configured but disabled; enable it to use it"),
+                );
+                return error(
+                    404,
+                    &format!(
+                        "model {id} is configured but disabled; enable it in the gateway panel"
+                    ),
+                );
+            }
+            RouteOutcome::Unknown => {
+                if path == "/api/bridge/test" {
+                    return error(404, "custom model not found");
+                }
+            }
         }
     }
     if method == "GET" && path == "/api/bridge/usage" {
@@ -895,6 +984,12 @@ fn body_snippet(body: &str) -> String {
 /// The embedded management panel, reused verbatim from the working build.
 ///
 /// `no-store` matters: the panel talks to the live management API, and a cached copy would
+/// Paths that serve the static management panel (the older build used all of them). The page holds
+/// no secrets, so it is also served without a token: otherwise the page that asks for the token
+/// would itself be blocked, which is how `server.enforceToken` used to make the panel unusable.
+fn is_panel_path(path: &str) -> bool {
+    ["", "/index.html", "/dashboard", "/dashboard/index.html"].contains(&path)
+}
 /// keep rendering stale model lists after an edit.
 fn panel_response() -> Response {
     Response::builder()
@@ -953,11 +1048,16 @@ fn capture_request(telemetry: &telemetry::Shared, body: &Value) {
     if dir.trim().is_empty() {
         return;
     }
+    // The name has to stay unique when two requests arrive in the same millisecond: a bare
+    // timestamp silently overwrote the earlier body, which made the capture useless exactly when
+    // it was needed (a burst of parallel turns).
+    static CAPTURE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = CAPTURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let path = PathBuf::from(dir).join(format!("generate-{stamp}.json"));
+    let path = PathBuf::from(dir).join(format!("generate-{stamp}-{seq}.json"));
     match path
         .parent()
         .map(std::fs::create_dir_all)
@@ -1286,6 +1386,7 @@ fn bearer_token(value: &str) -> &str {
 #[cfg(test)]
 mod route_tests {
     use super::canonical;
+    use serde_json::json;
 
     #[test]
     fn management_panel_is_served_by_the_gateway() {
@@ -1302,6 +1403,32 @@ mod route_tests {
         assert!(html.contains("Accio Gateway Bridge"));
         assert!(html.contains("primeApiKeyField"));
         assert!(html.contains("apiKeyFieldDirty"));
+        // Model rows used to splice the model id into inline handlers; the id now travels in data
+        // attributes and every management call goes through the token-aware fetch wrapper.
+        assert!(html.contains("data-model-action"));
+        assert!(html.contains("data-model-toggle"));
+        assert!(html.contains("bindModelTableActions"));
+        assert!(
+            !html.contains("onclick=\"openEditModelModal('${"),
+            "the model id must not be interpolated into an inline handler"
+        );
+        assert!(html.contains("apiFetch"));
+        assert!(html.contains("tokenBadge"));
+        assert!(html.contains("x-gateway-token"));
+    }
+    #[test]
+    fn the_panel_is_served_without_a_token_but_everything_else_is_not() {
+        for path in ["", "/index.html", "/dashboard", "/dashboard/index.html"] {
+            assert!(super::is_panel_path(path), "{path} serves the panel");
+        }
+        for path in [
+            "/api/bridge/status",
+            "/healthz",
+            "/api/llm/config/v2",
+            "/dashboard/x",
+        ] {
+            assert!(!super::is_panel_path(path), "{path} must stay gated");
+        }
     }
     #[test]
     fn panel_paths_are_canonicalised_like_before() {
@@ -1315,6 +1442,57 @@ mod route_tests {
                     .contains(&canonical.as_str()),
                 "{path} -> {canonical}"
             );
+        }
+    }
+    #[test]
+    fn a_formal_id_is_never_shadowed_by_another_models_alias() {
+        // The first model claims "fast" as an alias; the second model is actually called "fast".
+        let models = vec![
+            json!({"id":"provider-a","modelCode":"provider-a","aliases":["fast"],"enabled":true}),
+            json!({"id":"fast","modelCode":"fast","enabled":true}),
+        ];
+        match super::route_model(&models, "fast") {
+            super::RouteOutcome::Found(model, note) => {
+                assert_eq!(model["id"], "fast", "the real id has to win");
+                assert!(note.unwrap().contains("id"), "the choice is logged");
+            }
+            _ => panic!("expected the model whose id is fast"),
+        }
+        // Case-insensitive, and an alias still resolves when no id claims it.
+        match super::route_model(&models, "PROVIDER-A") {
+            super::RouteOutcome::Found(model, _) => assert_eq!(model["id"], "provider-a"),
+            _ => panic!("id match must be case-insensitive"),
+        }
+        match super::route_model(&models, "provider-a") {
+            super::RouteOutcome::Found(model, _) => assert_eq!(model["id"], "provider-a"),
+            _ => panic!("unexpected"),
+        }
+    }
+    #[test]
+    fn disabled_and_unknown_models_are_told_apart() {
+        let models = vec![json!({"id":"off","modelCode":"off","enabled":false})];
+        match super::route_model(&models, "off") {
+            super::RouteOutcome::Disabled(id) => assert_eq!(id, "off"),
+            _ => panic!("a registered but disabled model must not look unknown"),
+        }
+        match super::route_model(&models, "qwen-max") {
+            super::RouteOutcome::Unknown => {}
+            _ => panic!("an official model name must stay unknown so it can be proxied"),
+        }
+        assert!(matches!(
+            super::route_model(&models, "   "),
+            super::RouteOutcome::Unknown
+        ));
+    }
+    #[test]
+    fn upstream_model_names_never_outrank_a_real_id() {
+        let models = vec![
+            json!({"id":"a","upstreamModel":"shared","enabled":true}),
+            json!({"id":"shared","modelCode":"shared","enabled":true}),
+        ];
+        match super::route_model(&models, "shared") {
+            super::RouteOutcome::Found(model, _) => assert_eq!(model["id"], "shared"),
+            _ => panic!("expected the model whose id is shared"),
         }
     }
     #[test]

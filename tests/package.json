@@ -1,0 +1,12 @@
+{
+  "name": "accio-bridge-embedded-panel-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DOM tests for the embedded management panel (src/dashboard.html). Install with: npm install --prefix tests --registry=https://registry.npmmirror.com",
+  "scripts": {
+    "test": "node panel.test.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  }
+}

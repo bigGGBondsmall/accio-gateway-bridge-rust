@@ -1,17 +1,53 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
-const binary = fileURLToPath(
-  new URL(
-    `../../target/debug/accio-gateway-bridge-rust${process.platform === "win32" ? ".exe" : ""}`,
-    import.meta.url,
-  ),
-);
+// Resolve the core binary the way a developer actually builds it: honour an explicit override
+// first, then CARGO_TARGET_DIR (which is how this repo is built here, so the artifacts are NOT
+// under <repo>/target), then the default target directory. Without this the suite failed with a
+// bare ENOENT that looked like a source defect.
+const exeSuffix = process.platform === "win32" ? ".exe" : "";
+const binary = (() => {
+  const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+  const candidates = [
+    process.env.ACCIO_BRIDGE_TEST_BINARY,
+    process.env.CARGO_TARGET_DIR &&
+      path.join(
+        process.env.CARGO_TARGET_DIR,
+        "debug",
+        `accio-gateway-bridge-rust${exeSuffix}`,
+      ),
+    process.env.CARGO_TARGET_DIR &&
+      path.join(
+        process.env.CARGO_TARGET_DIR,
+        "release",
+        `accio-gateway-bridge-rust${exeSuffix}`,
+      ),
+    path.join(
+      repoRoot,
+      "target",
+      "debug",
+      `accio-gateway-bridge-rust${exeSuffix}`,
+    ),
+    path.join(
+      repoRoot,
+      "target",
+      "release",
+      `accio-gateway-bridge-rust${exeSuffix}`,
+    ),
+  ].filter(Boolean);
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (found) return found;
+  throw new Error(
+    `cannot find the gateway binary; build it first (cargo build --locked) or set ` +
+      `ACCIO_BRIDGE_TEST_BINARY. Tried:\n  ${candidates.join("\n  ")}`,
+  );
+})();
 test("UI through real local Rust core: connect/create/edit/disable/delete, token not persisted", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "accio-ui-live-"));
   const config = path.join(dir, "config.json");

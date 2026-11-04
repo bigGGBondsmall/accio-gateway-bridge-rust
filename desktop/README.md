@@ -1,5 +1,5 @@
 # Accio Bridge 桌面端（Tauri 2）
-> **状态：未启用、未构建（保留备选）。** 本包实际使用的桌面入口是 Go 壳 `target\release\accio-desktop.exe`（源码在 Node 仓库 `desktop/`）；本目录的 Tauri 壳需要 MSVC/VS Build Tools，此前从未成功构建，也没有 Windows GUI 验收记录。除非明确要迁移到 Tauri，否则不要把这里当作当前入口。
+> **状态：未启用（保留备选）。** 本包实际使用的桌面入口是 Go 壳 `target\release\accio-desktop.exe`（源码在 Node 仓库 `desktop/`）。本目录的 Tauri 壳需要 MSVC/VS Build Tools：它曾在一台 Linux 云工作区完成原生 `cargo build`（见同目录 `VALIDATION.md`，含当时的 sidecar 哈希），但**从未在 Windows 上构建或启动过**，也没有 Windows GUI 验收记录。本机（只有 gnu 工具链）无法构建它。除非明确要迁移到 Tauri，否则不要把这里当作当前入口。
 
 这是原生 Tauri 窗口 + **随应用打包的 Rust 网关子进程**，不是把网页另起一个名字。启动后随机分配回环端口，生成仅本进程有效的管理令牌，由 Rust 代理允许列表里的管理请求。令牌不传入 JavaScript、不写入配置；关闭应用会终止其网关。API Key 在配置文件中保存，**尚未接入操作系统安全存储**。
 

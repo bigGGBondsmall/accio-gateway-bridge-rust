@@ -25,6 +25,8 @@ async function main() {
       if (body.model === 'truncate') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'); return; }
       if (body.model === 'tool') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"provider_call","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n'); return; }
       if (!body.stream) { res.setHeader('content-type','application/json'); res.end(JSON.stringify({choices:[{message:{content:'nonstream'},finish_reason:'stop'}],usage:{prompt_tokens:2,completion_tokens:3}})); return; }
+      if (body.model === 'toolcut') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"cut","function":{"name":"read","arguments":"{\\"path\\":\\"a.tx"}}]}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":5,"completion_tokens":9}}\n\ndata: [DONE]\n\n'); return; }
+      if (body.model === 'toolusage') { res.setHeader('content-type','text/event-stream');res.end('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"kept","function":{"name":"read","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":9}}\n\ndata: [DONE]\n\n'); return; }
       res.setHeader('content-type','text/event-stream');res.end('data: {"choices":\r\ndata: [{"delta":{"content":"hello"}}]}\r\n\r\ndata: [DONE]\r\n\r\n'); return;
     }
     if (req.url === '/api/chat') { res.setHeader('content-type','application/x-ndjson');res.end('{"message":{"content":"local"},"done":true,"prompt_eval_count":2,"eval_count":3}'); return; }
@@ -35,6 +37,9 @@ async function main() {
   const config={server:{host:'127.0.0.1',port:0},upstream:{baseUrl:upstream},catalog:{fetchOfficial:true},models:[
     {id:'openai',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'normal',apiKey:'synthetic-secret',enabled:true,aliases:['alias']},
     {id:'ollama',provider:'ollama',baseUrl:upstream,upstreamModel:'local',enabled:true},
+    {id:'toolcut',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'toolcut',enabled:true},
+    {id:'off',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'normal',enabled:false},
+    {id:'toolusage',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'toolusage',enabled:true},
     {id:'tool',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'tool',enabled:true},
     {id:'truncate',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'truncate',enabled:true},
   ]};
@@ -169,6 +174,34 @@ async function main() {
     const before=await count();
     await generate('openai');
     assert.strictEqual(await count(),before,'no new debug lines after switching back to info');
+  });
+  await check('a length-limited tool call is reported instead of delivered',async()=>{
+    const f=await generate('toolcut');
+    assert.ok(f.some(x=>x.error&&/length/.test(x.error.message)),JSON.stringify(f));
+    assert.ok(!f.some(x=>x.finishReason==='TOOL_CALLS'),'a truncated call must not look runnable');
+    assert.ok(!f.some(x=>JSON.stringify(x).includes('functionCall')),'the half-written call must not be delivered');
+    assert.strictEqual(f.at(-1).usageMetadata.totalTokenCount,14,'usage survives the failure');
+  });
+  await check('a finished tool call keeps its usage',async()=>{
+    const f=await generate('toolusage');
+    assert.strictEqual(f.at(-1).finishReason,'TOOL_CALLS');
+    assert.strictEqual(f.at(-1).usageMetadata.totalTokenCount,14);
+    const call=f.flatMap(x=>x.content?.parts||[]).find(x=>x.functionCall).functionCall;
+    assert.strictEqual(call.name,'read');
+    assert.strictEqual(call.argsJson,'{"path":"a.txt"}');
+  });
+  await check('a disabled model is refused by name, an unknown one still proxies',async()=>{
+    // A registered model that is switched off used to fall through to the official passthrough,
+    // where the request failed for an unrelated reason. It is now named explicitly.
+    const disabled=await req('/api/adk/llm/generateContent','POST',{model:'off',contents:[{parts:[{text:'hi'}]}]});
+    assert.strictEqual(disabled.status,404);
+    const body=await disabled.json();
+    assert.match(body.error,/configured but disabled/);
+    // An unknown name is still an official model as far as the gateway knows: it proxies.
+    const unknown=await req('/api/adk/llm/generateContent','POST',{model:'qwen-max',contents:[{parts:[{text:'hi'}]}]});
+    assert.strictEqual(unknown.status,207);
+    // A configured alias keeps working.
+    assert.strictEqual((await generate('alias'))[0].content.parts[0].text,'hello');
   });
   console.log(`${total-failures}/${total} black-box Rust core checks passed`);
   if (failures) process.exitCode = 1;

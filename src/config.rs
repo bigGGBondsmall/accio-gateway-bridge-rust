@@ -43,6 +43,35 @@ pub fn normalize(mut config: Value) -> Result<Value, String> {
             m["isDefault"] = json!(true);
         }
     }
+    // A `modelCode` or alias that repeats another model's formal id leaves two models answering to
+    // one name. Routing resolves that by tier (a formal id wins), but a save that creates the
+    // collision is almost certainly a mistake, so refuse it while the editor is still open. This is
+    // the last use of `models`, so the mutable borrow above ends here.
+    let mut claimed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for model in models.iter() {
+        if let Some(id) = model["id"].as_str().filter(|s| !s.is_empty()) {
+            claimed.insert(id.to_lowercase(), id.to_string());
+        }
+    }
+    for model in models.iter() {
+        let owner = model["id"].as_str().unwrap_or("");
+        let mut secondary: Vec<String> = Vec::new();
+        if let Some(code) = model["modelCode"].as_str() {
+            secondary.push(code.to_string());
+        }
+        if let Some(list) = model["aliases"].as_array() {
+            secondary.extend(list.iter().filter_map(|a| a.as_str().map(str::to_string)));
+        }
+        for name in secondary {
+            if let Some(other) = claimed.get(&name.to_lowercase()) {
+                if !other.eq_ignore_ascii_case(owner) {
+                    return Err(format!(
+                        "model {owner} also answers to {name:?}, which is the id of {other}; rename one of them"
+                    ));
+                }
+            }
+        }
+    }
     for (section, keys) in [
         ("server", vec!["cors", "enforceToken"]),
         ("catalog", vec!["enabled", "fetchOfficial"]),
@@ -206,5 +235,30 @@ mod tests {
         let mut c = defaults();
         c["server"]["host"] = json!("0.0.0.0");
         assert!(normalize(c).is_err());
+    }
+    #[test]
+    fn a_secondary_name_may_not_shadow_another_models_id() {
+        let with_models = |models: Vec<Value>| {
+            let mut c = defaults();
+            c["models"] = json!(models);
+            normalize(c)
+        };
+        // Two providers, the first claiming "fast" as an alias and the second called "fast".
+        let collision = with_models(vec![
+            json!({"id":"provider-a","aliases":["fast"]}),
+            json!({"id":"fast"}),
+        ]);
+        let message = collision.unwrap_err();
+        assert!(message.contains("also answers to \"fast\""), "{message}");
+
+        // Sharing an upstream model name across providers is legitimate and must stay allowed.
+        let shared_upstream = with_models(vec![
+            json!({"id":"a","upstreamModel":"gpt-4o"}),
+            json!({"id":"b","upstreamModel":"gpt-4o"}),
+        ]);
+        assert!(shared_upstream.is_ok());
+
+        // A model repeating its own id as an alias is not a conflict.
+        assert!(with_models(vec![json!({"id":"a","modelCode":"a","aliases":["a"]})]).is_ok());
     }
 }

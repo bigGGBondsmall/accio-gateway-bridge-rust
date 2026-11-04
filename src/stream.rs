@@ -260,9 +260,19 @@ impl Sink {
                 self.reason.as_deref(),
             ))
         } else {
-            Ok(protocol::calls_frame(
-                std::mem::take(&mut self.calls).into_values().collect(),
-            ))
+            let calls: Vec<Value> = std::mem::take(&mut self.calls).into_values().collect();
+            // A call the upstream never finished writing is reported as a failure instead of being
+            // handed over as a runnable tool call; the usage it already reported is kept.
+            if let Some(problem) = protocol::tool_calls_incomplete(self.reason.as_deref()) {
+                let mut frame = error_frame(&problem);
+                if let Some(tokens) = self.usage.take() {
+                    if tokens.is_object() {
+                        frame["usageMetadata"] = protocol::usage(&tokens);
+                    }
+                }
+                return Ok(frame);
+            }
+            Ok(protocol::calls_frame(calls, self.usage.take()))
         }
     }
 }
@@ -374,5 +384,53 @@ mod tests {
         let mut d = Decoder::new(true);
         d.feed(b"{\"done\":true}").unwrap();
         assert_eq!(d.eof().unwrap().len(), 1);
+    }
+    #[test]
+    fn truncated_tool_call_is_reported_not_delivered() {
+        // Upstream streams a tool call, then stops because it hit the length limit.
+        let mut sink = Sink::new(true);
+        sink.event(
+            &json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{\"path\":\"a.tx"}}]}}]}).to_string(),
+            false,
+        )
+        .unwrap();
+        sink.event(
+            &json!({"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":5,"completion_tokens":9}}).to_string(),
+            false,
+        )
+        .unwrap();
+        let frame = sink.finish().unwrap();
+        assert!(
+            frame["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("length"),
+            "{frame}"
+        );
+        assert_eq!(frame["turnComplete"], true);
+        assert!(
+            frame["content"].is_null(),
+            "an unfinished call must not be delivered"
+        );
+        assert_eq!(frame["usageMetadata"]["totalTokenCount"], json!(14));
+    }
+
+    #[test]
+    fn finished_tool_call_keeps_usage_and_reports_tool_calls() {
+        let mut sink = Sink::new(true);
+        sink.event(
+            &json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{\"path\":\"a.txt\"}"}}]}}]}).to_string(),
+            false,
+        )
+        .unwrap();
+        sink.event(
+            &json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":9}}).to_string(),
+            false,
+        )
+        .unwrap();
+        let frame = sink.finish().unwrap();
+        assert_eq!(frame["finishReason"], "TOOL_CALLS");
+        assert_eq!(frame["usageMetadata"]["totalTokenCount"], json!(14));
+        assert_eq!(frame["content"]["parts"][0]["functionCall"]["name"], "read");
     }
 }

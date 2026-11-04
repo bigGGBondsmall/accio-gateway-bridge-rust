@@ -59,8 +59,8 @@
                                                       "sha256":  "d6a4dbc6b51752165d0e35f415cb079c41f483823e84424cbae257ce2250bf27"
                                                   },
                   "desktop/README.md":  {
-                                            "bytes":  2492,
-                                            "sha256":  "fa107fa45ba747d3adc5457206b835ca3f910ab9c16643b5854f4a613e943cb6"
+                                            "bytes":  2679,
+                                            "sha256":  "a17404358439fba10c94b10a6e1e309cdad54826dd65ff717655dcc1e9dc060d"
                                         },
                   "desktop/src/lifecycle.rs":  {
                                                    "bytes":  4664,
@@ -83,8 +83,8 @@
                                                       "sha256":  "218afd8fc9e7e2ef9149bdc77970d1a5397aa23f4805c7a02e612104492395fa"
                                                   },
                   "docs/changes-2026-11-03.md":  {
-                                                     "bytes":  7504,
-                                                     "sha256":  "c736806bca795a38a97d8b5ae0b9648755f6685a86f7b0eaed96db63433ed15e"
+                                                     "bytes":  9999,
+                                                     "sha256":  "2360d7894362f43cf9e69de17d40c3f11aa2e5245d84e4baa95fbec809d700e3"
                                                  },
                   "docs/local-discovery-and-accio.md":  {
                                                             "bytes":  3303,
@@ -106,13 +106,17 @@
                                          "bytes":  1862,
                                          "sha256":  "e8ceea4ee29199f1dc7a561ec21474fb7350cea0a751c7336a8daf5985332c4e"
                                      },
+                  "LICENSE":  {
+                                  "bytes":  1071,
+                                  "sha256":  "ad90e6ebcca5e34570e556e056d382244d68798709ec51699af235d9dd7c3288"
+                              },
                   "README.en.md":  {
-                                       "bytes":  6852,
-                                       "sha256":  "982d5e683532fdc244cc7a419b07982476d75ae9ffb19040535134fde20c5cb7"
+                                       "bytes":  8543,
+                                       "sha256":  "5743e502efd6367cee2e8f8c43c18ad0bb6de835d626ee78e9de4587ad8c44ea"
                                    },
                   "README.md":  {
-                                    "bytes":  9030,
-                                    "sha256":  "0cce3790c6c1fe6f67744a02d32490f8765307658330d00bf1bb8c2bd0c5a5bc"
+                                    "bytes":  10629,
+                                    "sha256":  "62efc5dace1718a41288968a1cea435e6a06a6ffb34e1b5cfdf028e5af410965"
                                 },
                   "scripts/check.sh":  {
                                            "bytes":  214,
@@ -123,44 +127,64 @@
                                        "sha256":  "9f376d7cf348a47ebcb4c1978f78afdfdd4fb58bf99db70957d5163019efd90c"
                                    },
                   "src/config.rs":  {
-                                        "bytes":  7400,
-                                        "sha256":  "080fca3ca322888dcdd139dec9eace69c60e33f9f16d924deefc69d2231328a0"
+                                        "bytes":  9932,
+                                        "sha256":  "01ef23a7f6a20524407b0891f7b66b311a9d6fd30910cdd9201b4272cc92e7bc"
                                     },
                   "src/dashboard.html":  {
-                                             "bytes":  60678,
-                                             "sha256":  "c8b21cde0dfdf16786a571f6b73dfe71fb2f15e380ef2703031b75b534f5c0f0"
+                                             "bytes":  64490,
+                                             "sha256":  "e41ba2ad06da1e99db9599cecdaecdf934fb34f46379587ea927a867bd2c5f12"
                                          },
                   "src/discovery.rs":  {
                                            "bytes":  13058,
                                            "sha256":  "f22b65fa16337235598843fdf63da96e20c6f06675b7616f80ed958c3ed6c5c5"
                                        },
                   "src/main.rs":  {
-                                      "bytes":  52226,
-                                      "sha256":  "ffc9edc263bf9a5de1cb2525bd9e6b4aa15dcb7588db62c0f18970b62021606a"
+                                      "bytes":  60180,
+                                      "sha256":  "35536186aa74d301faf06175c7d239ab73ee859c3c2e42504efe2decadb932ba"
                                   },
                   "src/management.rs":  {
                                             "bytes":  18143,
                                             "sha256":  "4c19821bca94de2a5957b11b1be1c4daa5c571ca6b8a708f7e651d454aba38ee"
                                         },
                   "src/protocol.rs":  {
-                                          "bytes":  37334,
-                                          "sha256":  "c3e882b27cfbbd54d0019c2fb534da7feecd89641510a0e258b532caced22fa3"
+                                          "bytes":  41857,
+                                          "sha256":  "0fec14628f109cc6938a4ac3dd807fd32484f49640bc2215c8ea01ed4f0c5a28"
                                       },
                   "src/protocol-fixtures.json":  {
                                                      "bytes":  20351,
                                                      "sha256":  "cf6846fbf6b387bd5ffa62c503471093d8e90a6857c652ef0b4a9610790eaedb"
                                                  },
                   "src/stream.rs":  {
-                                        "bytes":  14315,
-                                        "sha256":  "79b6dd4472a6153dc26010f28e105a9558f1273aaa911251e0cc59d4c7343cf1"
+                                        "bytes":  16854,
+                                        "sha256":  "f2a34830e87b545236c9fe92dd84cf133cb6b63bef5a2e778c93acb475c1756f"
                                     },
                   "src/telemetry.rs":  {
                                            "bytes":  6685,
                                            "sha256":  "d6f68016bb038c410c976a06be9fff59153b69028a91522ccb7bc8083bc8e65d"
                                        },
+                  "tests/.gitignore":  {
+                                           "bytes":  14,
+                                           "sha256":  "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97"
+                                       },
+                  "tests/package.json":  {
+                                             "bytes":  365,
+                                             "sha256":  "d495599516bda4c32764605517ab9508ff72d1302bea2c0f872c10494d8c06d3"
+                                         },
+                  "tests/package-lock.json":  {
+                                                  "bytes":  18794,
+                                                  "sha256":  "2bf5f89bf3e2d1c2d82d18393905fefb27c62e4a3df3194f6bfef1e553eee5e0"
+                                              },
+                  "tests/panel.test.cjs":  {
+                                               "bytes":  19954,
+                                               "sha256":  "232031488dba68257f9287bb4659e861c9b084f11f86ba6e4ed72ca5ca74629b"
+                                           },
+                  "tests/PANEL-TESTS.md":  {
+                                               "bytes":  2238,
+                                               "sha256":  "42ef25279e5791f95f0bbac70894f92c03fe683700798847a897ad8bbfab423f"
+                                           },
                   "tests/parity.cjs":  {
-                                           "bytes":  17644,
-                                           "sha256":  "65ed196f282f30da7f4cee79aa2b09ebfe0210bff4a0d837a6319ca046ab31a9"
+                                           "bytes":  20566,
+                                           "sha256":  "c8ce02434d7628e022c5c51a848b5fed6a598da6e2d3951dd1b6bb8535cbedc8"
                                        },
                   "tests/upstream-stream.cjs":  {
                                                     "bytes":  7202,
@@ -199,8 +223,8 @@
                                        "sha256":  "edb7173cb426093e1bd96b5d406e07461edf0be2ec4ffcc61a5a3d60d62c3221"
                                    },
                   "ui/test/live.test.js":  {
-                                               "bytes":  5068,
-                                               "sha256":  "7fb9f49eba49d326064e528177b01ddabbe893fee4d1f71e5cb08ee52a49d59d"
+                                               "bytes":  6371,
+                                               "sha256":  "32195ecbdcc9a9137866a86c5b9c23cb5730843d4110632435448bcd29399e1d"
                                            },
                   "ui/test/ui.test.js":  {
                                              "bytes":  8878,

@@ -29,7 +29,7 @@ cp config.example.json config.json
 默认监听 `127.0.0.1:8080`，不自动调用模型。`--port 0` 自动选择空闲端口，标准输出打印 `{event:"listening",host,port}` JSON。`--help` 查看参数；`ACCIO_BRIDGE_CONFIG` 也可以指定配置路径。配置不存在时使用空模型安全默认值，首次编辑时创建文件，父目录须已存在。
 
 桌面构建和运行见 [`desktop/README.md`](desktop/README.md)（若该文件尚不存在，请参阅桌面模块随附文档）。桌面壳负责自己启动的 Rust 子进程，不再依赖旧 Node daemon。不要把原仓库旧 EXE 当作这个版本的产物。
-> **当前在用的桌面入口是 Go 壳，不是本包内的 Tauri 壳。** 本包 `desktop/` 存放的是 Tauri 2 源码，**未启用、从未构建**（官方要求 MSVC 工具链，本机只有 gnu 工具链）；真正在用的是 `target\release\accio-desktop.exe`（Go 壳：7 个视图 + 系统托盘 + 单实例 + `--selftest`），其源码位于原 Node 仓库的 `desktop/` 目录（与本包分开维护）。两种壳都只是外壳，引擎始终是本包的 `accio-gateway-bridge-rust.exe`。
+> **当前在用的桌面入口是 Go 壳，不是本包内的 Tauri 壳。** 本包 `desktop/` 存放的是 Tauri 2 源码，**未启用**；它曾在一台 Linux 云工作区完成原生 `cargo build`（见 `desktop/VALIDATION.md`），但**从未在 Windows 上构建或启动过**，Tauri 官方要求 MSVC 工具链而本机只有 gnu 工具链。真正在用的是 `target\release\accio-desktop.exe`（Go 壳：7 个视图 + 系统托盘 + 单实例 + `--selftest`），其源码位于原 Node 仓库的 `desktop/` 目录（与本包分开维护）。两种壳都只是外壳，引擎始终是本包的 `accio-gateway-bridge-rust.exe`。
 
 ## 原配置迁移
 
@@ -46,14 +46,14 @@ cp config.example.json config.json
 | 功能 | 当前实现与限制 |
 |---|---|
 | Accio 模型目录 | 自定义模型 + 官方目录合并；有界、按上游/认证/请求体区分的单槽缓存及并发合并 |
-| Accio 生成接口 | 三个旧路由别名；模型 ID/别名不区分大小写；OpenAI Chat Completions、Ollama |
+| Accio 生成接口 | 三个旧路由别名；模型名分层匹配（正式 `id` > `modelCode` > 别名 > `upstreamModel`，不分大小写），歧义名命中时记录告警并点名双方；已注册但禁用的模型返回 404（提示在面板启用），未知名字仍透传官方上游；OpenAI Chat Completions、Ollama |
 | Azure | OpenAI 兼容形状 + `api-key` 请求头；不是完整 Azure deployment/API-version 适配器 |
-| 协议转换 | 文本、系统提示、图片输入、工具声明/调用/结果；工具 ID 续轮匹配；非图片附件转为明确的元数据说明，不解码或抓取内容 |
-| 流式输出 | 真实分块转发；SSE 多行/CRLF/CR/UTF-8、Ollama NDJSON 尾帧；客户端断开取消上游 |
+| 协议转换 | 文本、系统提示、图片输入、工具声明/调用/结果；工具 ID 续轮匹配；工具调用帧与纯文本轮一样携带上游 `usageMetadata`；完整但非法的参数文本仍原样交给客户端自行报解析错误（旧黑盒用例如此断言）；非图片附件转为明确的元数据说明，不解码或抓取内容 |
+| 流式输出 | 真实分块转发；SSE 多行/CRLF/CR/UTF-8、Ollama NDJSON 尾帧；客户端断开取消上游；上游因长度/令牌上限或内容过滤中止时返回带该原因的 error（用量保留），不再把半截调用标成 `finishReason: "TOOL_CALLS"` |
 | 错误处理 | 异常/截断流不伪装成功；模型请求不自动重试或转发另一模型，避免重复计费 |
 | 模型/提供商管理 | 增删改（`?id=`、路径式 `DELETE /api/bridge/models/<id>`、`POST /api/bridge/models/delete` 支持 body/query）、分组、默认模型、开关；密钥不回显，省略保留、空串清除 |
-| 管理面板 | 网关自身在 `/`、`/index.html`、`/dashboard`、`/dashboard/` 返回内嵌的管理面板（复用旧版面板，`no-store`）；面板对已存密钥只显示 `hasKey`，编辑时**留空即保留**、输入新值即替换、显式清空才删除 |
-| 配置管理 | 白名单字段编辑；验证私有副本后原子落盘；运行时管理令牌不持久化 |
+| 管理面板 | 网关自身在 `/`、`/index.html`、`/dashboard`、`/dashboard/` 返回内嵌的管理面板（复用旧版面板，`no-store`）；模型操作改走 `data-model-action` / `data-model-toggle` 属性 + 委托监听，不再把模型 id 拼进内联 `onclick`/`onchange`（含引号的 id 不再弄坏按钮，也无法借 id 注入脚本）；管理调用统一经包装函数附带内存中的 `x-gateway-token`，401 时显示令牌输入条；面板页自身免令牌（`server.enforceToken` 为真时亦然，否则索取令牌的页面会被自己挡住），管理路由仍全部需认证；面板对已存密钥只显示 `hasKey`，编辑时**留空即保留**、输入新值即替换、显式清空才删除 |
+| 配置管理 | 白名单字段编辑；保存时拒绝重名（`modelCode` 或别名等于另一个模型的正式 `id` 时报错并点名两个模型；多个提供商共用一个 `upstreamModel` 仍允许）；验证私有副本后原子落盘；运行时管理令牌不持久化 |
 | 日志/用量 | 与 Node 版同形的有界日志（每行 `ts`/`level`/`msg`，另带 `model`；容量 1000 行）、等级/条数过滤；**记录等级可选**（`debug`/`info`/`warn`/`error`，默认 `info`）：启动时用 `ACCIO_BRIDGE_LOG_LEVEL` 或配置 `logging.level`（兼容旧的 `server.logLevel`），运行时用 `GET`/`POST /api/bridge/logging` 切换；低于阈值的行不入环，`debug` 行记录解析后的上游地址、上游状态、工具数、**客户端回填的工具结果名**与透传去向；请求数、错误数、耗时；每套不同的转发工具集记一条诊断日志；`ACCIO_BRIDGE_CAPTURE_DIR` 可选落盘生成请求；不是费用账单/Token 计费系统 |
 | 本地发现 | 显式触发才探测；有界并发/超时/响应体；支持指定提供商查询模型 |
 | Accio 检测/启动 | 读取有限安装元数据与版本证据；启动必须显式调用；未知/非中国版要求确认；测试只使用 fixtures，真实启动未验收 |
@@ -68,6 +68,7 @@ cp config.example.json config.json
 
 - 默认仅回环地址；非回环绑定必须配置令牌，所有请求强制认证。外部浏览器 Origin 和不受信 Host 被拒绝。
 - 自定义模型只接收它自身保存的 API key，不接收官方 Cookie、官方 Authorization 或网关令牌；禁用上游重定向。
+- 管理面板页面本身免令牌提供（否则索取令牌的页面会被自己挡住），但每一项管理路由仍要求令牌；面板令牌由包装函数从内存取值附加到 `x-gateway-token`，只存内存，不写入浏览器存储、Cookie、配置或 URL。
 - 官方入站标头按 Node 版语义转发：除逐跳头、重新计算的 `content-length` 与本网关管理令牌 `x-gateway-token` 外全部透传，包含 `cookie` / `authorization` / `x-accio-token`——Accio 的登录态正是这样在 `POST /api/mcp/ali1688/sgcookie` 这类路径上重放的；等于保存的 `server.token` 或运行时令牌的 Bearer 会被过滤，不会当作凭据发给官方上游。
 - 查询参数 `token` / `sg_k` 不透传；响应 Cookie 不透传；重定向不跟随。真实可用的认证方式仍以 Accio 自身登录态为准。
 - 修改隐藏密钥的目的地址时必须重新输入或明确清除密钥，避免把旧密钥自动发送给新地址。
