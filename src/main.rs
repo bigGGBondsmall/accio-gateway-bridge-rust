@@ -221,6 +221,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         .build()?;
+    // Recording level: env wins over config, and POST /api/bridge/logging changes it at runtime.
+    let initial_log_level = std::env::var("ACCIO_BRIDGE_LOG_LEVEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| c["logging"]["level"].as_str().map(str::to_string))
+        .or_else(|| c["server"]["logLevel"].as_str().map(str::to_string));
     let app = App {
         config: Arc::new(RwLock::new(c)),
         path: Arc::new(path),
@@ -230,6 +236,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         catalog_cache: Default::default(),
         last_tools: Default::default(),
     };
+    if let Some(level) = initial_log_level {
+        if let Err(reason) = telemetry::set_level(&app.telemetry, &level) {
+            eprintln!("logging: {reason}");
+        }
+    }
     let listener = tokio::net::TcpListener::bind(&address).await?;
     let local = listener.local_addr()?;
     app.config.write().await["server"]["port"] = json!(local.port());
@@ -587,6 +598,35 @@ async fn dispatch(
     if method == "GET" && path == "/api/bridge/logs" {
         return json_response(telemetry::logs(&app.telemetry, uri.query().unwrap_or("")));
     }
+    if path == "/api/bridge/logging" {
+        if method == "GET" {
+            return json_response(json!({
+                "ok": true,
+                "level": telemetry::level(&app.telemetry),
+                "levels": telemetry::LEVELS,
+                "sources": "ACCIO_BRIDGE_LOG_LEVEL, config logging.level, POST {level}"
+            }));
+        }
+        if method == "POST" {
+            let body = match decode(bytes, header(headers, "content-encoding"), max) {
+                Ok(value) => value,
+                Err(message) => return error(400, &message),
+            };
+            return match telemetry::set_level(&app.telemetry, body["level"].as_str().unwrap_or(""))
+            {
+                Ok(level) => {
+                    telemetry::log(
+                        &app.telemetry,
+                        "info",
+                        &format!("log recording level set to {level}"),
+                    );
+                    json_response(json!({"ok": true, "level": level, "levels": telemetry::LEVELS}))
+                }
+                Err(message) => error(400, &message),
+            };
+        }
+        return error(405, "method not allowed");
+    }
     if method == "GET" && path == "/api/bridge/discover" {
         return json_response(discovery::discover(cfg, &app.client).await);
     }
@@ -736,6 +776,15 @@ async fn proxy(
         Ok(r) => r,
         Err(_) => return error(502, "official upstream connection failed"),
     };
+    telemetry::log(
+        &app.telemetry,
+        "debug",
+        &format!(
+            "passthrough {method} {} -> {}",
+            uri.path(),
+            response.status().as_u16()
+        ),
+    );
     let generation = [
         "/api/adk/llm",
         "/api/adk/llm/generateContent",
@@ -864,10 +913,27 @@ async fn catalog(app: &App, cfg: &Value, headers: &HeaderMap, bytes: &[u8]) -> R
     if cfg["catalog"]["enabled"] != false && !enabled.is_empty() {
         providers.push(json!({"provider":cfg["catalog"]["providerName"],"providerDisplayName":cfg["catalog"]["providerDisplayName"],"modelList":enabled}));
     }
+    telemetry::log(
+        &app.telemetry,
+        "debug",
+        &format!(
+            "catalog: custom models={} custom_group={} official_fetch={}",
+            enabled.len(),
+            cfg["catalog"]["enabled"] != false && !enabled.is_empty(),
+            cfg["catalog"]["fetchOfficial"] != false
+        ),
+    );
     let mut warning = None;
     if cfg["catalog"]["fetchOfficial"] != false {
         match official_catalog(app, cfg, headers, bytes).await {
-            Ok(official) => providers.extend(official),
+            Ok(official) => {
+                telemetry::log(
+                    &app.telemetry,
+                    "debug",
+                    &format!("catalog: official groups={}", official.len()),
+                );
+                providers.extend(official)
+            }
             Err(()) => warning = Some("Official catalogue unavailable"),
         }
     }
@@ -999,6 +1065,23 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
             "chat/completions"
         }
     );
+    telemetry::log(
+        &app.telemetry,
+        "debug",
+        &format!(
+            "generate {} -> {} (provider={}, stream={}, tools={}, auth={})",
+            model["id"].as_str().unwrap_or("?"),
+            endpoint,
+            model["provider"].as_str().unwrap_or("openai"),
+            streaming,
+            report.names.len(),
+            if model["apiKey"].as_str().is_some_and(|k| !k.is_empty()) {
+                "key"
+            } else {
+                "none"
+            }
+        ),
+    );
     let mut request = app
         .client
         .post(endpoint)
@@ -1016,7 +1099,14 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
     }
     let response = match request.send().await {
         Ok(r) => r,
-        Err(_) => return error(502, "model upstream connection failed"),
+        Err(e) => {
+            telemetry::log(
+                &app.telemetry,
+                "debug",
+                &format!("upstream connection failed: {e}"),
+            );
+            return error(502, "model upstream connection failed");
+        }
     };
     if !response.status().is_success() {
         return error(
@@ -1028,6 +1118,15 @@ async fn generate(app: &App, cfg: &Value, model: &Value, body: &Value) -> Respon
         );
     }
     let content_type = header(response.headers(), "content-type").to_ascii_lowercase();
+    telemetry::log(
+        &app.telemetry,
+        "debug",
+        &format!(
+            "upstream replied status={} contentType={}",
+            response.status().as_u16(),
+            content_type
+        ),
+    );
     if !streaming || (!ollama && !content_type.contains("text/event-stream")) {
         let text = match bounded_text(response, 8 * 1024 * 1024).await {
             Ok(text) => text,

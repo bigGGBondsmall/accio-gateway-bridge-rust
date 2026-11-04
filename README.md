@@ -54,7 +54,7 @@ cp config.example.json config.json
 | 模型/提供商管理 | 增删改（`?id=`、路径式 `DELETE /api/bridge/models/<id>`、`POST /api/bridge/models/delete` 支持 body/query）、分组、默认模型、开关；密钥不回显，省略保留、空串清除 |
 | 管理面板 | 网关自身在 `/`、`/index.html`、`/dashboard`、`/dashboard/` 返回内嵌的管理面板（复用旧版面板，`no-store`）；面板对已存密钥只显示 `hasKey`，编辑时**留空即保留**、输入新值即替换、显式清空才删除 |
 | 配置管理 | 白名单字段编辑；验证私有副本后原子落盘；运行时管理令牌不持久化 |
-| 日志/用量 | 与 Node 版同形的有界日志（每行 `ts`/`level`/`msg`，另带 `model`；容量 1000 行）、等级/条数过滤；请求数、错误数、耗时；每套不同的转发工具集记一条诊断日志；`ACCIO_BRIDGE_CAPTURE_DIR` 可选落盘生成请求；不是费用账单/Token 计费系统 |
+| 日志/用量 | 与 Node 版同形的有界日志（每行 `ts`/`level`/`msg`，另带 `model`；容量 1000 行）、等级/条数过滤；**记录等级可选**（`debug`/`info`/`warn`/`error`，默认 `info`）：启动时用 `ACCIO_BRIDGE_LOG_LEVEL` 或配置 `logging.level`（兼容旧的 `server.logLevel`），运行时用 `GET`/`POST /api/bridge/logging` 切换；低于阈值的行不入环，`debug` 行记录解析后的上游地址、上游状态、工具数与透传去向；请求数、错误数、耗时；每套不同的转发工具集记一条诊断日志；`ACCIO_BRIDGE_CAPTURE_DIR` 可选落盘生成请求；不是费用账单/Token 计费系统 |
 | 本地发现 | 显式触发才探测；有界并发/超时/响应体；支持指定提供商查询模型 |
 | Accio 检测/启动 | 读取有限安装元数据与版本证据；启动必须显式调用；未知/非中国版要求确认；测试只使用 fixtures，真实启动未验收 |
 | 官方透传 | 保留方法/状态/原始请求体及查询字节，去除逐跳头；认证只在固定允许路由透传 |

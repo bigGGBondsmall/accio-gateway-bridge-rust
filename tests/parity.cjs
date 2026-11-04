@@ -149,6 +149,24 @@ async function main() {
     const logs=report.lines.map(l=>l.msg).join(' | ');
     assert.ok(logs.includes('tools forwarded for openai'),logs);
   });
+  await check('recording level switches at runtime and gates debug lines',async()=>{
+    const initial=await(await req('/api/bridge/logging')).json();
+    assert.strictEqual(initial.ok,true);
+    assert.deepStrictEqual(initial.levels,['debug','info','warn','error']);
+    assert.strictEqual((await req('/api/bridge/logging','POST',{level:'verbose'})).status,400);
+    const set=await(await req('/api/bridge/logging','POST',{level:'debug'})).json();
+    assert.strictEqual(set.level,'debug');
+    await generate('openai');
+    const debugLines=(await(await req('/api/bridge/logs?lines=100')).json()).lines.filter(l=>l.level==='debug');
+    assert.ok(debugLines.some(l=>l.msg.includes('generate openai ->')),JSON.stringify(debugLines.slice(0,3)));
+    assert.ok(debugLines.some(l=>l.msg.startsWith('upstream replied status=200')),JSON.stringify(debugLines.slice(0,3)));
+    const back=await(await req('/api/bridge/logging','POST',{level:'info'})).json();
+    assert.strictEqual(back.level,'info');
+    const count=async()=>(await(await req('/api/bridge/logs?lines=200')).json()).lines.filter(l=>l.level==='debug').length;
+    const before=await count();
+    await generate('openai');
+    assert.strictEqual(await count(),before,'no new debug lines after switching back to info');
+  });
   console.log(`${total-failures}/${total} black-box Rust core checks passed`);
   if (failures) process.exitCode = 1;
 }
