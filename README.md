@@ -39,7 +39,7 @@ cp config.example.json config.json
 4. 确认模型、提供商、默认模型和端口后，用模拟或自有测试模型检查。真实请求可能产生费用，由你决定是否发送。
 5. 若回退，关闭新网关，启动原 Node 版本并使用原配置备份。
 
-桌面生成的 `ACCIO_BRIDGE_TOKEN` 是**本进程的数据面临时令牌**，不会写入配置。它覆盖 `/api/bridge/*` 与健康检查，不阻断 Accio 默认数据请求。保存的 `server.token` / `server.enforceToken` 用于数据接口认证，两者不是同一凭据。
+桌面生成的 `ACCIO_BRIDGE_TOKEN` 是**本进程的数据面临时令牌**，不会写入配置。它覆盖 `/api/bridge/*` 与健康检查，不阻断 Accio 默认数据请求。保存的 `server.token` / `server.enforceToken` 用于数据接口认证，两者不是同一凭据。**配置了 `server.adminToken` 之后，`/api/bridge/*` 下的管理、探测与启动路由改为要求管理令牌**，数据面令牌只剩下 inference 与 catalogue 能力（二进制的 `--help` 输出与此一致）。
 
 新增可选配置 `server.adminToken`（第二把密钥）。**留空或缺省时行为与旧版完全一致：一个令牌通行全部能力**，升级不需要改动既有 `config.json`，在用的桌面流程不受影响。一旦配置了管理令牌，能力被拆分：inference（生成、官方透传、健康检查）、catalogue（官方模型目录）、management（配置与状态/日志/用量读写）、discovery（本机探测与模型列表探测）、launch（启动本机 Accio 可执行文件）。此时数据面令牌只保留 inference / catalogue，其余范围必须用 `x-gateway-token`（或 `Authorization: Bearer`）传入管理令牌；即使 `server.enforceToken` 为假，管理类范围也强制认证，因为配置第二把密钥本身就是"管理应当受保护"的声明。凭据缺失或无效返回 **401**，凭据有效但缺少该范围返回 **403**（面板据此区分"请输入令牌"与"该令牌缺少管理范围，需要管理令牌"）。两把密钥都不会出现在任何响应体中，`GET /api/bridge/config` 只暴露布尔 `server.hasAdminToken`。
 

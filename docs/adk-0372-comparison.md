@@ -43,6 +43,7 @@
 - earlier compatibility fixes：`/__bridge/accio`、`/__bridge/accio/launch` 与 POST models/delete 别名仍在。
 
 ## 验证与边界
+> 本节及其后的数字描述 `f39fef4` 那个快照（当时的单元 44、旧黑盒 22）。当前树的最新数字见 `docs/changes-2026-11-03.md` 末尾的各增量小节；`validation/` 下的日志是当时的原始记录，不会回填，措辞中的"最终"仅指那次交付。
 
 最终日志：`validation/f39fef4-final-checks.log`。统一运行入口 `sh scripts/check.sh` 包含格式、单元测试、clippy、核心构建、旧黑盒和新增流传输黑盒；另运行 UI 的 npm test 和 npm run check。
 

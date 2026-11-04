@@ -83,8 +83,8 @@
                                                 "sha256":  "62ff56e301fb948e79fd716c4b2c829aaa059657d955a9c304f76c259af573a4"
                                             },
                   "docs/adk-0372-comparison.md":  {
-                                                      "bytes":  7818,
-                                                      "sha256":  "218afd8fc9e7e2ef9149bdc77970d1a5397aa23f4805c7a02e612104492395fa"
+                                                      "bytes":  8109,
+                                                      "sha256":  "2d3e21daf72822812edf7d14eeab1ad36bd97e4ff694fc7f694a676bd775e8cb"
                                                   },
                   "docs/changes-2026-11-03.md":  {
                                                      "bytes":  14950,
@@ -115,12 +115,12 @@
                                   "sha256":  "ad90e6ebcca5e34570e556e056d382244d68798709ec51699af235d9dd7c3288"
                               },
                   "README.en.md":  {
-                                       "bytes":  11954,
-                                       "sha256":  "a79d6acda2f9cc95ee633b8776dc917f13e81492c2fd2de7748eda5a4175babb"
+                                       "bytes":  12217,
+                                       "sha256":  "18b933420c0dd7a942184475a4c7570a5da6228b1b49f10f637f7942590ab749"
                                    },
                   "README.md":  {
-                                    "bytes":  14130,
-                                    "sha256":  "6a12bb42abb7aac4411e76a9c1668ddba370d611e5dd507a89b9fb9a0e765b86"
+                                    "bytes":  14356,
+                                    "sha256":  "129005e19e540748e070a1b5e8f3556fa9a72511cb244faf5034b1a6c474aab3"
                                 },
                   "scripts/check.sh":  {
                                            "bytes":  214,
