@@ -87,8 +87,8 @@
                                                       "sha256":  "2d3e21daf72822812edf7d14eeab1ad36bd97e4ff694fc7f694a676bd775e8cb"
                                                   },
                   "docs/changes-2026-11-03.md":  {
-                                                     "bytes":  14950,
-                                                     "sha256":  "9c869d3ad2dcfdb4c686577c0696c32bc0d5c53771b5b09820d6c4579ba60197"
+                                                     "bytes":  16468,
+                                                     "sha256":  "92c911a2b1777a1d2a77531f81b0a4feb6b57b0973125c74d17b645148bfb0ee"
                                                  },
                   "docs/local-discovery-and-accio.md":  {
                                                             "bytes":  3303,
@@ -115,12 +115,12 @@
                                   "sha256":  "ad90e6ebcca5e34570e556e056d382244d68798709ec51699af235d9dd7c3288"
                               },
                   "README.en.md":  {
-                                       "bytes":  12217,
-                                       "sha256":  "18b933420c0dd7a942184475a4c7570a5da6228b1b49f10f637f7942590ab749"
+                                       "bytes":  12901,
+                                       "sha256":  "bffb4490b794788cddead0baa56e5653d98a9e4bca27d72a9fdfca88edd46d5b"
                                    },
                   "README.md":  {
-                                    "bytes":  14356,
-                                    "sha256":  "129005e19e540748e070a1b5e8f3556fa9a72511cb244faf5034b1a6c474aab3"
+                                    "bytes":  15049,
+                                    "sha256":  "2de6b4f2c1e14436ae6af8ebbb460f56c10aa2f5c58263ec6ab98a77626d60e4"
                                 },
                   "scripts/check.sh":  {
                                            "bytes":  214,
@@ -131,8 +131,8 @@
                                        "sha256":  "9f376d7cf348a47ebcb4c1978f78afdfdd4fb58bf99db70957d5163019efd90c"
                                    },
                   "src/config.rs":  {
-                                        "bytes":  12531,
-                                        "sha256":  "c5c71e08c62543573bc3be92df707bc28028e8cdf0e38edd78bb007bc727500c"
+                                        "bytes":  13885,
+                                        "sha256":  "12da9a883091218d54a40ec6b9d69d87838cfcb1a7d335bf5988ad3f53e7d335"
                                     },
                   "src/dashboard.html":  {
                                              "bytes":  65694,
@@ -143,8 +143,8 @@
                                            "sha256":  "e2467c86d7c1ca852e1f00bb6a973f98aea9f809592998d74fd78484af6ba678"
                                        },
                   "src/main.rs":  {
-                                      "bytes":  110364,
-                                      "sha256":  "84bbf38ccb5dcc7e70fa5f21230946a04cfd7830aec274aa0942f0623dbd8afb"
+                                      "bytes":  119447,
+                                      "sha256":  "b93575aa6a7fa5d0292c716ddcf4ffec43e1baa1674534f7493acb95a08c522c"
                                   },
                   "src/management.rs":  {
                                             "bytes":  18143,
@@ -163,8 +163,8 @@
                                         "sha256":  "2f2fd1ae27757517bb051a0c1deb51f8b70804053405af1498a9f8a6d8e0f0be"
                                     },
                   "src/telemetry.rs":  {
-                                           "bytes":  6685,
-                                           "sha256":  "d6f68016bb038c410c976a06be9fff59153b69028a91522ccb7bc8083bc8e65d"
+                                           "bytes":  9399,
+                                           "sha256":  "6d8a4fababd429eaa45f582319846d2052231739f167d46d87baaf9d71ffa336"
                                        },
                   "tests/.gitignore":  {
                                            "bytes":  14,
@@ -187,12 +187,12 @@
                                                "sha256":  "42ef25279e5791f95f0bbac70894f92c03fe683700798847a897ad8bbfab423f"
                                            },
                   "tests/parity.cjs":  {
-                                           "bytes":  33960,
-                                           "sha256":  "b2d019c6fd8f1c3412e279cfc05516d6b219d6c6ae5e78a43300a3ab4ddd0452"
+                                           "bytes":  40864,
+                                           "sha256":  "2eac36aaa6271c9411c75885d0b48444c5087591a7546e8577916c65a865a808"
                                        },
                   "tests/upstream-stream.cjs":  {
-                                                    "bytes":  8059,
-                                                    "sha256":  "bfef675cbef660022bd57d6796e50a4b1998dbfa6de2cfe68f0fc633763b2add"
+                                                    "bytes":  9325,
+                                                    "sha256":  "beb5f3539aca1c8ee6b18ba03784c14e5bf84b3ed72ba450013352b4d2e87ad6"
                                                 },
                   "ui/.gitignore":  {
                                         "bytes":  20,

@@ -46,6 +46,43 @@ fn error(status: u16, msg: &str) -> Response {
 fn json_response(v: Value) -> Response {
     Json(v).into_response()
 }
+/// The one shape every routing answer uses: the 404 for a path this gateway does not serve and the
+/// 405 for a method a path does not accept. It is the body the official upstream returns for a path
+/// it does not know (`timestamp` / `path` / `status` / `error` / `requestId`), so a caller sees the
+/// same error shape whether the miss is answered here or by the origin. `requestId` is generated
+/// locally: no upstream request is involved in a local routing miss.
+fn standard_error(status: u16, label: &str, path: &str) -> Response {
+    (
+        StatusCode::from_u16(status).unwrap(),
+        Json(json!({
+            "timestamp": crate::discovery::timestamp(),
+            "path": path,
+            "status": status,
+            "error": label,
+            "requestId": local_request_id(),
+        })),
+    )
+        .into_response()
+}
+/// Correlation id for a locally answered routing miss, in the same shape as the one the official
+/// upstream puts in its error body.
+fn local_request_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed) % 1_000_000;
+    format!("{nanos:08x}-{sequence:06}")
+}
+fn not_found(path: &str) -> Response {
+    standard_error(404, "Not Found", path)
+}
+fn method_not_allowed(path: &str) -> Response {
+    standard_error(405, "Method Not Allowed", path)
+}
+
 fn header<'a>(h: &'a HeaderMap, key: &str) -> &'a str {
     h.get(key).and_then(|v| v.to_str().ok()).unwrap_or("")
 }
@@ -103,7 +140,7 @@ impl Scope {
 /// - Management: `GET /api/bridge/status|config|models|usage|logs|logging|providers`,
 ///   `PUT /api/bridge/config`, `POST|DELETE /api/bridge/models`, `POST /api/bridge/models/delete`,
 ///   `PATCH|DELETE /api/bridge/models/*`, `POST|PATCH|DELETE /api/bridge/providers*`, and any other
-///   `/api/bridge/*` or `/__bridge/*` operation without an implementation yet (the 501 answer).
+///   `/api/bridge/*` or `/__bridge/*` path this table has not caught up with (answered 404).
 /// - Discovery: `GET /api/bridge/discover`, `POST /api/bridge/discover/models` and
 ///   `GET /api/bridge/accio` (it runs tasklist/pgrep and honours `?exePath=`).
 /// - Launch: `POST /api/bridge/accio/launch`.
@@ -138,8 +175,8 @@ fn required_scope(method: &str, path: &str) -> Scope {
         return Scope::Inference;
     }
     if path.starts_with("/api/bridge/") || path.starts_with("/__bridge/") {
-        // Anything else under the management prefix is either unimplemented (501 in `dispatch`) or
-        // a route whose shape this table has not caught up with: refuse it as management.
+        // Anything else under the management prefix is a path whose shape this table has not caught
+        // up with: refuse it as management (and `dispatch` then answers 404 for it).
         return Scope::Management;
     }
     Scope::Inference
@@ -572,8 +609,14 @@ async fn dispatch(
     // The management panel is served by the gateway itself, on the same paths the older build
     // used, so the URL people already had keeps working. `canonical()` reduces a trailing slash
     // to nothing, which makes "/" an empty string and "/dashboard/" a plain "/dashboard".
-    if is_panel_path(method.as_str(), path) {
-        return panel_response();
+    // The page is GET-only, and every one of those paths says so the same way: a method the path
+    // does not accept is a 405, not a different answer per path (the old build proxied some of
+    // them, so `POST /` came back 405 from the origin while `POST /dashboard` came back 404).
+    if is_panel_route(path) {
+        if method == "GET" {
+            return panel_response();
+        }
+        return method_not_allowed(uri.path());
     }
     if method == "GET" && (path == "/healthz" || path == "/__bridge/health") {
         return json_response(
@@ -613,11 +656,17 @@ async fn dispatch(
         if let Some(conflict) = config::route_name_conflict(&next) {
             return error(400, &conflict);
         }
-        if let Err(e) = config::save(&app.path, &next).await {
-            return error(500, &e);
-        }
+        // A save that `disableDiskSave` skipped is reported and not counted as an edit that reached
+        // the disk: a caller may not be told a configuration was saved when it was only kept in
+        // memory. The flag's purpose is unchanged — nothing is written.
+        let persisted = match config::save(&app.path, &next).await {
+            Ok(persisted) => persisted,
+            Err(e) => return error(500, &e),
+        };
         *guard = next;
-        return json_response(result);
+        let mut out = result;
+        out["persisted"] = json!(persisted);
+        return json_response(out);
     }
     if path == "/api/bridge/config" && (method == "GET" || method == "PUT") {
         if method == "GET" {
@@ -679,14 +728,14 @@ async fn dispatch(
             Ok(v) => v,
             Err(e) => return error(400, &e),
         };
-        if let Some(conflict) = config::route_name_conflict(&next) {
-            return error(400, &conflict);
-        }
-        if let Err(e) = config::save(&app.path, &next).await {
-            return error(500, &e);
-        }
+        let persisted = match config::save(&app.path, &next).await {
+            Ok(persisted) => persisted,
+            Err(e) => return error(500, &e),
+        };
         *guard = next;
-        return json_response(json!({"ok":true,"config":safe_config(&guard)}));
+        return json_response(
+            json!({"ok":true,"persisted":persisted,"config":safe_config(&guard)}),
+        );
     }
     if method == "GET" && path == "/api/bridge/models" {
         return json_response(json!({"ok":true,"models":public}));
@@ -771,13 +820,15 @@ async fn dispatch(
         if let Some(conflict) = config::route_name_conflict(&next) {
             return error(400, &conflict);
         }
-        if let Err(e) = config::save(&app.path, &next).await {
-            return error(500, &e);
-        }
+        let persisted = match config::save(&app.path, &next).await {
+            Ok(persisted) => persisted,
+            Err(e) => return error(500, &e),
+        };
         *guard = next;
         let mut out = result;
         out["ok"] = json!(true);
         out["success"] = json!(true);
+        out["persisted"] = json!(persisted);
         out["models"] = json!(guard["models"]
             .as_array()
             .unwrap()
@@ -914,11 +965,13 @@ async fn dispatch(
                 .into_response(),
         };
     }
+    // No route under the management prefix is recognised-but-unimplemented any more, so an unknown
+    // one is exactly what it looks like: a path this gateway does not serve. It used to answer 501
+    // with `{"ok":false,"error":...}`, which claimed the operation existed and reported a shape no
+    // other answer uses. It now answers 404 in the same error shape as every other routing miss,
+    // instead of being relayed to the official origin (a management path is never an upstream path).
     if path.starts_with("/api/bridge/") || path.starts_with("/__bridge/") {
-        return error(
-            501,
-            "This management operation is not implemented in Rust core v0.1",
-        );
+        return not_found(uri.path());
     }
     proxy(app, cfg, method, headers, uri, bytes).await
 }
@@ -1402,13 +1455,16 @@ fn panel_response() -> Response {
         .body(Body::from(include_str!("dashboard.html")))
         .unwrap()
 }
-/// Paths that serve the static management panel (the older build used all of them). The page holds
-/// no secrets, so it is also served without a token — but for GET only: any other method keeps the
-/// normal routing and authentication, so a POST can never be answered with the page. Without the
-/// exemption the page that asks for the token would itself be blocked by it, which is how
-/// `server.enforceToken` used to make the panel unusable.
+/// The paths that serve the static management panel (the older build used all of them). The page
+/// holds no secrets, so it is also served without a token — but for GET only: any other method is a
+/// 405 from `dispatch`, so a POST can never be answered with the page and never reaches the origin
+/// either. Without the token exemption the page that asks for the token would itself be blocked by
+/// it, which is how `server.enforceToken` used to make the panel unusable.
+fn is_panel_route(path: &str) -> bool {
+    ["", "/index.html", "/dashboard", "/dashboard/index.html"].contains(&path)
+}
 fn is_panel_path(method: &str, path: &str) -> bool {
-    method == "GET" && ["", "/index.html", "/dashboard", "/dashboard/index.html"].contains(&path)
+    method == "GET" && is_panel_route(path)
 }
 fn single_frame(frame: Value) -> Response {
     sse_response(futures_util::stream::once(async move {
@@ -1998,10 +2054,12 @@ mod route_tests {
     fn the_panel_is_served_without_a_token_but_everything_else_is_not() {
         for path in ["", "/index.html", "/dashboard", "/dashboard/index.html"] {
             assert!(super::is_panel_path("GET", path), "{path} serves the panel");
-            // The Node build serves the page for GET only; a POST used to be answered with HTML.
+            // The page is served for GET only: the path is still a panel path, so another method
+            // is refused as unsupported instead of being proxied or answered with HTML.
+            assert!(super::is_panel_route(path), "{path} is a panel path");
             assert!(
                 !super::is_panel_path("POST", path),
-                "POST {path} must be proxied"
+                "POST {path} must not be answered with the page"
             );
         }
         for path in [
@@ -2743,5 +2801,128 @@ mod route_tests {
         );
         assert!(super::capture_limit() > 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn a_tier_whose_hits_are_all_disabled_never_falls_through_to_a_lower_tier() {
+        // The name resolves in the `id` tier, where its only hit is switched off, while another
+        // model offers the same name as an alias. Answering from the alias would send the request to
+        // a provider the caller never named, which is the confusion the tier order exists to remove.
+        let models = vec![
+            json!({"id":"off","modelCode":"off","enabled":false}),
+            json!({"id":"b2","modelCode":"b2","aliases":["off"],"enabled":true}),
+        ];
+        match super::route_model(&models, "off") {
+            super::RouteOutcome::Disabled(id) => assert_eq!(id, "off"),
+            _ => panic!("a name whose hits are all disabled must be refused, not rerouted"),
+        }
+        // The same rule holds for a lower tier: a disabled alias is refused instead of being
+        // answered by another model's upstream-model name.
+        let deeper = vec![
+            json!({"id":"hidden","modelCode":"hidden","aliases":["shared-name"],"enabled":false}),
+            json!({"id":"other","modelCode":"other","upstreamModel":"shared-name","enabled":true}),
+        ];
+        match super::route_model(&deeper, "shared-name") {
+            super::RouteOutcome::Disabled(id) => assert_eq!(id, "hidden"),
+            _ => panic!("the alias tier must be refused as disabled"),
+        }
+    }
+    #[tokio::test]
+    async fn an_unknown_management_path_is_a_404_in_the_shared_error_shape() {
+        use axum::http::StatusCode;
+        let app = test_app(credentials("inference-secret", ""), None);
+        for (method, path) in [
+            ("GET", "/api/bridge/nonexistent-probe"),
+            ("POST", "/api/bridge/nonexistent-probe"),
+            ("GET", "/api/bridge/models/1/2"),
+            ("GET", "/__bridge/unknown"),
+        ] {
+            let (status, text) = call(&app, method, path, Some("inference-secret"), "{}").await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}: {text}");
+            let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(body["status"], json!(404), "{method} {path}: {text}");
+            assert_eq!(body["error"], json!("Not Found"), "{method} {path}: {text}");
+            assert!(body["timestamp"].is_string(), "{method} {path}: {text}");
+            assert!(body["requestId"].is_string(), "{method} {path}: {text}");
+            assert_eq!(body["path"], json!(path), "{method} {path}: {text}");
+            assert!(
+                !text.contains("not implemented") && body.get("ok").is_none(),
+                "an unknown path must not claim the operation exists: {text}"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn a_method_a_panel_path_does_not_accept_is_a_405_on_every_panel_path() {
+        use axum::http::StatusCode;
+        let app = test_app(credentials("inference-secret", ""), None);
+        for path in ["/", "/index.html", "/dashboard", "/dashboard/"] {
+            for method in ["POST", "PUT", "PATCH", "DELETE"] {
+                let (status, text) = call(&app, method, path, Some("inference-secret"), "{}").await;
+                assert_eq!(
+                    status,
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "{method} {path}: {text}"
+                );
+                assert!(
+                    !text.contains("<!DOCTYPE html>"),
+                    "{method} {path} must not be answered with the page"
+                );
+                let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(body["status"], json!(405), "{method} {path}: {text}");
+                assert_eq!(
+                    body["error"],
+                    json!("Method Not Allowed"),
+                    "{method} {path}: {text}"
+                );
+                assert!(body["timestamp"].is_string(), "{method} {path}: {text}");
+                assert!(body["requestId"].is_string(), "{method} {path}: {text}");
+            }
+            // GET still serves the page, and still without a credential.
+            let (status, text) = call(&app, "GET", path, None, "").await;
+            assert_eq!(status, StatusCode::OK, "{path}: {text}");
+            assert!(text.contains("Accio Gateway Bridge"), "{path}");
+        }
+    }
+    #[tokio::test]
+    async fn an_edit_that_was_not_written_to_disk_says_so() {
+        use axum::http::StatusCode;
+        // `credentials()` sets `disableDiskSave`, which used to be invisible: the panel was told
+        // "ok" while nothing reached the file.
+        let app = test_app(credentials("inference-secret", ""), None);
+        let (status, text) = call(
+            &app,
+            "POST",
+            "/api/bridge/models",
+            Some("inference-secret"),
+            r#"{"id":"memory-only","provider":"openai","baseUrl":"http://127.0.0.1:9/v1"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(body["persisted"], json!(false), "{text}");
+        assert_eq!(body["ok"], json!(true), "{text}");
+        assert_eq!(body["success"], json!(true), "{text}");
+        // The edit is still applied in memory: the flag only stops the write.
+        assert!(
+            body["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["id"] == json!("memory-only")),
+            "{text}"
+        );
+        let (status, text) = call(
+            &app,
+            "PUT",
+            "/api/bridge/config",
+            Some("inference-secret"),
+            r#"{"catalog":{"enabled":false}}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&text).unwrap()["persisted"],
+            json!(false),
+            "{text}"
+        );
     }
 }

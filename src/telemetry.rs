@@ -13,6 +13,26 @@ pub struct Telemetry {
 pub type Shared = Arc<Mutex<Telemetry>>;
 /// Same depth as the Node gateway's ring buffer (`LOG_BUFFER_CAPACITY`).
 pub const LOG_CAPACITY: usize = 1000;
+/// Longest line the ring stores, in bytes of UTF-8. The ring is bounded by line *count*, which does
+/// not bound it by size: one prompt or tool-name list used to be stored whole, so a thousand such
+/// lines could hold hundreds of megabytes. The limit is far above any ordinary diagnostic line, and
+/// a line that reaches it is stored cut, with `TRUNCATION_MARKER` as the visible last text.
+pub const LOG_LINE_LIMIT: usize = 8 * 1024;
+/// Appended to a line that was cut, so a reader can tell it from a shorter complete line.
+pub const TRUNCATION_MARKER: &str = "… (truncated)";
+/// The stored form of one message: unchanged while it fits, otherwise cut on a UTF-8 boundary to at
+/// most `LOG_LINE_LIMIT` bytes. Every line that reaches the ring goes through here, so the record
+/// shape (`ts`/`level`/`msg`) and the level/count filters are untouched.
+fn stored_line(message: &str) -> String {
+    if message.len() <= LOG_LINE_LIMIT {
+        return message.to_string();
+    }
+    let mut end = LOG_LINE_LIMIT - TRUNCATION_MARKER.len();
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{TRUNCATION_MARKER}", &message[..end])
+}
 /// Recording levels, quietest first. A line is stored only when its level is at or
 /// above the threshold, so `debug` costs nothing until it is switched on.
 pub const LEVELS: [&str; 4] = ["debug", "info", "warn", "error"];
@@ -74,7 +94,8 @@ impl Drop for Turn {
             }
             let level = if self.success { "info" } else { "error" };
             if weight(level) >= state.min_level {
-                state.logs.push_back(json!({"ts":now(),"level":level,"msg":if self.success{"Generation completed"}else{"Generation failed or client disconnected"},"model":self.id}));
+                // The same bound as `log`: one contract for every line the ring stores.
+                state.logs.push_back(json!({"ts":now(),"level":level,"msg":stored_line(if self.success{"Generation completed"}else{"Generation failed or client disconnected"}),"model":self.id}));
                 while state.logs.len() > LOG_CAPACITY {
                     state.logs.pop_front();
                 }
@@ -119,7 +140,7 @@ pub fn log(state: &Shared, level: &str, message: &str) {
         return;
     }
     s.logs
-        .push_back(json!({"ts":now(),"level":level,"msg":message}));
+        .push_back(json!({"ts":now(),"level":level,"msg":stored_line(message)}));
     while s.logs.len() > LOG_CAPACITY {
         s.logs.pop_front();
     }
@@ -191,5 +212,35 @@ mod tests {
         let errors = logs(&shared, "level=error");
         assert_eq!(errors["lines"].as_array().unwrap().len(), 1);
         assert_eq!(errors["lines"][0]["msg"].as_str(), Some("e"));
+    }
+
+    #[test]
+    fn a_line_that_reaches_the_size_limit_is_stored_cut_and_marked() {
+        let shared: Shared = Default::default();
+        set_level(&shared, "debug").unwrap();
+        // An ordinary long-ish line is untouched: the limit must not rewrite normal diagnostics.
+        let ordinary = "x".repeat(4096);
+        log(&shared, "info", &ordinary);
+        log(&shared, "info", &"你".repeat(LOG_LINE_LIMIT));
+        let lines = logs(&shared, "");
+        assert_eq!(lines["total"].as_u64(), Some(2));
+        assert_eq!(lines["lines"][0]["msg"].as_str(), Some(ordinary.as_str()));
+        let stored = lines["lines"][1]["msg"].as_str().unwrap();
+        assert!(
+            stored.ends_with(TRUNCATION_MARKER),
+            "the cut has to be visible: {stored}"
+        );
+        assert!(
+            stored.len() <= LOG_LINE_LIMIT,
+            "a stored line must not exceed the limit: {}",
+            stored.len()
+        );
+        // The cut is on a character boundary, so the stored text is still valid UTF-8 with no
+        // replacement characters, and the record shape is unchanged.
+        assert!(!stored.contains('\u{FFFD}'));
+        assert_eq!(lines["lines"][1]["level"].as_str(), Some("info"));
+        assert!(lines["lines"][1]["ts"].is_string());
+        // The level filter still narrows the ring on the same records.
+        assert_eq!(logs(&shared, "level=error")["total"].as_u64(), Some(0));
     }
 }
