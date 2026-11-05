@@ -169,9 +169,12 @@ pub fn public_model(m: &Value) -> Value {
     m["hasKey"] = json!(has);
     m
 }
-pub async fn save(path: &Path, v: &Value) -> Result<(), String> {
+/// Writes the configuration to `path` atomically. Returns whether the file was actually written:
+/// the `disableDiskSave` switch (test/offline use) keeps every edit in memory only, and callers
+/// report that as `persisted:false` instead of claiming an edit that never reached the disk.
+pub async fn save(path: &Path, v: &Value) -> Result<bool, String> {
     if v["disableDiskSave"] == true {
-        return Ok(());
+        return Ok(false);
     }
     // Every write path (config edits, model create/update/delete) lands here, which is the only
     // place that can refuse a colliding configuration before it reaches the disk.
@@ -203,7 +206,7 @@ pub async fn save(path: &Path, v: &Value) -> Result<(), String> {
     tokio::fs::rename(tmp, path)
         .await
         .map_err(|_| "cannot replace config atomically")?;
-    Ok(())
+    Ok(true)
 }
 
 /// Name collision between models: a `modelCode` or alias that repeats another model's formal `id`
@@ -313,5 +316,25 @@ mod tests {
         let mut broken = defaults();
         broken["server"]["discoveryAllowedHosts"] = json!([7]);
         assert!(normalize(broken).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_skipped_save_reports_that_nothing_was_persisted() {
+        // `disableDiskSave` keeps its purpose - nothing is written - but the caller has to be able
+        // to tell that apart from a real save, which is what the return value carries.
+        let dir = std::env::temp_dir().join(format!("accio-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        let mut skipped = defaults();
+        skipped["disableDiskSave"] = json!(true);
+        skipped["models"] = json!([{"id":"kept-in-memory"}]);
+        assert!(!save(&path, &skipped).await.unwrap());
+        assert!(!path.exists(), "the disk must stay untouched");
+        let mut written = defaults();
+        written["models"] = json!([{"id":"on-disk"}]);
+        assert!(save(&path, &written).await.unwrap());
+        assert!(std::fs::read_to_string(&path).unwrap().contains("on-disk"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -8,7 +8,25 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const zlib = require('node:zlib');
-const binary = path.resolve(process.argv[2] || path.join(__dirname, '../target/debug/accio-gateway-bridge-rust'));
+// Resolve the core binary the way it is actually built: the documented argument wins, then
+// ACCIO_BRIDGE_TEST_BINARY, then CARGO_TARGET_DIR (this repo is built with an external target dir,
+// so the artifact is NOT under <repo>/target), then the repo default. Windows artifacts carry
+// .exe. The documented invocation `node tests/upstream-stream.cjs <path-to-binary>` is unchanged.
+const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+const binary = (() => {
+  const explicit = process.argv[2] || process.env.ACCIO_BRIDGE_TEST_BINARY;
+  if (explicit) return path.resolve(explicit);
+  const repoRoot = path.join(__dirname, '..');
+  const candidates = [
+    process.env.CARGO_TARGET_DIR && path.join(process.env.CARGO_TARGET_DIR, 'debug', `accio-gateway-bridge-rust${exeSuffix}`),
+    process.env.CARGO_TARGET_DIR && path.join(process.env.CARGO_TARGET_DIR, 'release', `accio-gateway-bridge-rust${exeSuffix}`),
+    path.join(repoRoot, 'target', 'debug', `accio-gateway-bridge-rust${exeSuffix}`),
+    path.join(repoRoot, 'target', 'release', `accio-gateway-bridge-rust${exeSuffix}`),
+  ].filter(Boolean);
+  const found = candidates.find(candidate => fs.existsSync(candidate));
+  if (found) return found;
+  throw new Error(`cannot find the gateway binary; build it first (cargo build --locked) or set ACCIO_BRIDGE_TEST_BINARY. Tried:\n  ${candidates.join('\n  ')}`);
+})();
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'accio-stream-'));
 let child, provider;
 const seenHeaders = [];

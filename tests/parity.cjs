@@ -9,7 +9,25 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const zlib = require('node:zlib');
-const binary = path.resolve(process.argv[2] || path.join(__dirname, '../target/debug/accio-gateway-bridge-rust'));
+// Resolve the core binary the way it is actually built: the documented argument wins, then
+// ACCIO_BRIDGE_TEST_BINARY, then CARGO_TARGET_DIR (this repo is built with an external target dir,
+// so the artifact is NOT under <repo>/target), then the repo default. Windows artifacts carry
+// .exe. The documented invocation `node tests/parity.cjs <path-to-binary>` is unchanged.
+const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+const binary = (() => {
+  const explicit = process.argv[2] || process.env.ACCIO_BRIDGE_TEST_BINARY;
+  if (explicit) return path.resolve(explicit);
+  const repoRoot = path.join(__dirname, '..');
+  const candidates = [
+    process.env.CARGO_TARGET_DIR && path.join(process.env.CARGO_TARGET_DIR, 'debug', `accio-gateway-bridge-rust${exeSuffix}`),
+    process.env.CARGO_TARGET_DIR && path.join(process.env.CARGO_TARGET_DIR, 'release', `accio-gateway-bridge-rust${exeSuffix}`),
+    path.join(repoRoot, 'target', 'debug', `accio-gateway-bridge-rust${exeSuffix}`),
+    path.join(repoRoot, 'target', 'release', `accio-gateway-bridge-rust${exeSuffix}`),
+  ].filter(Boolean);
+  const found = candidates.find(candidate => fs.existsSync(candidate));
+  if (found) return found;
+  throw new Error(`cannot find the gateway binary; build it first (cargo build --locked) or set ACCIO_BRIDGE_TEST_BINARY. Tried:\n  ${candidates.join('\n  ')}`);
+})();
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'accio-rust-parity-'));
 let child, provider, total = 0, failures = 0;
 // Gateways started by the credential-separation block, killed like the main one.
@@ -240,6 +258,31 @@ async function main() {
     assert.ok(!f.some(x=>x.finishReason==='TOOL_CALLS'),'a truncated call must not look runnable');
     assert.strictEqual(f.at(-1).usageMetadata.totalTokenCount,14,'the non-stream failure keeps its usage');
   });
+  await check('a failed turn counts an error and is never counted as a success',async()=>{
+    // The counters are what a caller reads to tell a working workflow from a broken one, so a turn
+    // that failed must move `errors` and must not look like a completed success.
+    const usage=async id=>(await(await req('/api/bridge/usage')).json()).usage[id]||{requests:0,errors:0};
+    // The turn is counted when it starts and settled when it ends, so wait for the start to land.
+    const settled=async(id,requests)=>{for(let i=0;i<50;i++){const value=await usage(id);if(value.requests===requests)return value;await new Promise(r=>setTimeout(r,20));}return await usage(id);};
+    // A length-truncated tool call: the turn answers 200 with an error frame, and it is a failure.
+    const cutBefore=await usage('toolcut');
+    const cut=await generate('toolcut');
+    assert.ok(cut.some(frame=>frame.error),JSON.stringify(cut));
+    const cutAfter=await settled('toolcut',cutBefore.requests+1);
+    assert.strictEqual(cutAfter.requests,cutBefore.requests+1,`the attempt is counted: ${JSON.stringify(cutAfter)}`);
+    assert.strictEqual(cutAfter.errors,cutBefore.errors+1,`a truncated call is a failed turn: ${JSON.stringify(cutAfter)}`);
+    // A mid-stream upstream interruption settles the same way.
+    const truncatedBefore=await usage('truncate');
+    const truncated=await generate('truncate');
+    assert.ok(truncated.some(frame=>frame.error),JSON.stringify(truncated));
+    const truncatedAfter=await settled('truncate',truncatedBefore.requests+1);
+    assert.strictEqual(truncatedAfter.errors,truncatedBefore.errors+1,`an interrupted stream is a failed turn: ${JSON.stringify(truncatedAfter)}`);
+    // The counters stay independent: a turn that succeeds moves requests only.
+    const okBefore=await usage('openai');
+    await generate('openai');
+    const okAfter=await settled('openai',okBefore.requests+1);
+    assert.strictEqual(okAfter.errors,okBefore.errors,`a successful turn is not an error: ${JSON.stringify(okAfter)}`);
+  });
   await check('a colliding model name is refused on save, and the gateway keeps serving',async()=>{
     // 'openai' is an existing formal id; claiming it as another model's modelCode would leave two
     // models answering to one name, so the write must be refused while the editor is open.
@@ -248,10 +291,37 @@ async function main() {
     assert.match((await (await fetch(base+'/api/bridge/models',{signal:AbortSignal.timeout(5000)})).json()).models.map(m=>m.id).join(','),/^((?!collide).)*$/);
     assert.strictEqual((await req('/healthz')).status,200);
   });
-  await check('only GET serves the panel; other methods are proxied',async()=>{
-    const post=await req('/','POST',{});
-    assert.ok(!/text\/html/.test(post.headers.get('content-type')||''),'POST / must not return panel HTML');
-    await post.text();
+  await check('the panel is GET-only and answers 405 on every panel path',async()=>{
+    // `POST /dashboard` used to reach the origin and come back 404 while `POST /` came back 405
+    // from the origin: the same mistake got a different answer per path. The page is GET-only, so
+    // every one of its paths refuses another method the same way.
+    for(const route of ['/','/index.html','/dashboard','/dashboard/']){
+      const post=await req(route,'POST',{});
+      const body=await post.json();
+      assert.strictEqual(post.status,405,`POST ${route}: ${JSON.stringify(body)}`);
+      assert.strictEqual(body.status,405,`POST ${route}: ${JSON.stringify(body)}`);
+      assert.strictEqual(body.error,'Method Not Allowed',`POST ${route}: ${JSON.stringify(body)}`);
+      assert.ok(typeof body.timestamp==='string'&&typeof body.requestId==='string'&&typeof body.path==='string',JSON.stringify(body));
+      assert.ok(!JSON.stringify(body).includes('Accio Gateway Bridge'),'a method the path does not accept must never be answered with the page');
+      // GET is still the page, still served without a credential.
+      const get=await req(route);
+      assert.strictEqual(get.status,200,route);
+      assert.match(get.headers.get('content-type'),/text\/html/,route);
+    }
+  });
+  await check('an unknown management path is a 404 that does not claim the operation exists',async()=>{
+    for(const [method,route] of [['GET','/api/bridge/nonexistent-probe'],['POST','/api/bridge/nonexistent-probe'],['GET','/__bridge/unknown']]){
+      const response=await req(route,method,method==='POST'?{}:undefined);
+      const text=await response.text();
+      assert.strictEqual(response.status,404,`${method} ${route}: ${text}`);
+      const body=JSON.parse(text);
+      assert.strictEqual(body.status,404,text);
+      assert.strictEqual(body.error,'Not Found',text);
+      assert.strictEqual(body.path,route,text);
+      assert.ok(typeof body.timestamp==='string'&&typeof body.requestId==='string',text);
+      assert.ok(!('ok' in body),`a routing miss must not use the management answer shape: ${text}`);
+      assert.ok(!text.includes('not implemented'),`a missing path must not claim the operation exists: ${text}`);
+    }
   });
   // ---- the model relay is not a credential-relay primitive ------------------------------------
   await check('the model relay refuses a caller-supplied foreign host',async()=>{
@@ -279,15 +349,37 @@ async function main() {
     kid.stderr.on('data',c=>stderr+=c);
     kid.stdout.on('data',c=>{out+=c;let i;while((i=out.indexOf('\n'))>=0){const line=out.slice(0,i);out=out.slice(i+1);try{const msg=JSON.parse(line);if(msg.event==='listening'){clearTimeout(timeout);resolve(msg.port);}}catch{}}});
   });
-  const spawnGateway=async(name,server)=>{
+  const spawnGateway=async(name,server,models=[{id:'openai',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'normal',apiKey:'synthetic-secret'}])=>{
     const configPath=path.join(dir,name);
-    fs.writeFileSync(configPath,JSON.stringify({server:{host:'127.0.0.1',port:0,...server},upstream:{baseUrl:upstream},models:[{id:'openai',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'normal',apiKey:'synthetic-secret'}]}));
+    fs.writeFileSync(configPath,JSON.stringify({server:{host:'127.0.0.1',port:0,...server},upstream:{baseUrl:upstream},models}));
     const kid=spawn(binary,['--config',configPath,'--port','0'],{stdio:['ignore','pipe','pipe'],env:process.env});
     extraChildren.push(kid);
     return `http://127.0.0.1:${await waitListening(kid)}`;
   };
   const call=(base,route,headers={},method='GET',body)=>fetch(base+route,{method,headers:{...(body!==undefined?{'content-type':'application/json'}:{}),...headers},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(5000)});
   const splitBase=await spawnGateway('split-config.json',{token:'inference-secret',adminToken:'admin-secret',enforceToken:true});
+  // A file that already contains the name collision still starts (adoption only warns, so the owner
+  // can repair it in the panel), which is where the tier rule can be observed end to end: the write
+  // path would refuse to save this configuration.
+  const tierBase=await spawnGateway('tier-config.json',{},[
+    {id:'off',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'normal',enabled:false},
+    {id:'b2',provider:'openai',baseUrl:upstream+'/v1',upstreamModel:'shadowed',enabled:true,aliases:['off']},
+  ]);
+  await check('a tier whose hits are all disabled is refused instead of answered by a lower tier',async()=>{
+    const before=captured.length;
+    const disabled=await call(tierBase,'/api/adk/llm/generateContent',{},'POST',{model:'off',contents:[{parts:[{text:'hi'}]}]});
+    const refused=await disabled.text();
+    assert.strictEqual(disabled.status,404,refused);
+    const body=JSON.parse(refused);
+    assert.match(body.error,/configured but disabled/,refused);
+    assert.ok(body.error.includes('off'),`the refusal has to name the model that was asked for: ${refused}`);
+    assert.strictEqual(captured.length,before,'the request must not reach any provider');
+    // The other model is still reachable by its own name, so nothing else about routing changed.
+    const own=await call(tierBase,'/api/adk/llm/generateContent',{},'POST',{model:'b2',contents:[{parts:[{text:'hi'}]}]});
+    const ownText=await own.text();
+    assert.strictEqual(own.status,200,ownText);
+    assert.strictEqual(captured.at(-1).body.model,'shadowed',`b2 answers with its own upstream model: ${ownText.slice(0,200)}`);
+  });
   const singleBase=await spawnGateway('single-config.json',{token:'inference-secret',enforceToken:true});
   await check('an inference token is refused the management plane once an admin token exists',async()=>{
     const inference={'x-gateway-token':'inference-secret'};
